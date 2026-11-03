@@ -82,6 +82,9 @@ export function costoPedido(o, cfgIn, prods) {
 }
 
 // ---------- Anuncios ----------
+// La cuenta ECOM tiene campañas de otras marcas (Valmora): solo cuentan las que dicen "Impoluto" en el nombre.
+export const CAMPANA_TIENDA = /impoluto/i;
+export const soloCampanasTienda = (ads) => (ads || []).filter((a) => CAMPANA_TIENDA.test(a.can || ""));
 export function adsArs(rows, meta, cfgIn) {
   const cfg = costosCfg(cfgIn);
   const usd = String((meta && meta.currency) || "USD").toUpperCase() === "USD";

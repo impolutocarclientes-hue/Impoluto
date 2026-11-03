@@ -119,3 +119,8 @@ test("Mercado Pago: cada pedido usa la comisión real de su cobro", () => {
   const r0 = M.resumen({ orders: [v], ads: [], meta: {}, costos, prods }, "2026-10-10", "2026-10-10");
   assert.ok(Math.abs(r.ganancia - r0.ganancia) < 1e-6);
 });
+
+test("Anuncios: solo campañas de Impoluto (fuera Valmora)", () => {
+  const ads = [{ can: "Impoluto chapa 24/10/2026", sp: 10 }, { can: "Valmora Gotero lumbar 4/10/2026", sp: 5 }, { can: "Testeo valmora crema azul", sp: 3 }, { can: "IMPOLUTO escala", sp: 2 }];
+  assert.deepEqual(M.soloCampanasTienda(ads).map((a) => a.sp), [10, 2]);
+});

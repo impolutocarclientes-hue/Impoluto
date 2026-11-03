@@ -101,6 +101,7 @@ async function loadData() {
     S.data = await api(`/api/data?from=2020-01-01&to=${M.addDays(today, 1)}`);
     // Cada pedido con su cobro real de Mercado Pago (comisión exacta en vez del %).
     S.data.orders = M.vincularPagos(S.data.orders, S.data.pays);
+    S.data.ads = M.soloCampanasTienda(S.data.ads);
     S.mpPcts = M.mpPctReales(S.data.pays, M.addDays(today, -60));
     S.loaded = true;
   } catch (e) { if (e.message !== "auth") S.loadErr = e.message; }
