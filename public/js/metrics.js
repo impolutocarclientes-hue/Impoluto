@@ -98,7 +98,9 @@ function fijosEnRango(cfg, from, to) {
 // ---------- Mercado Pago ----------
 // Cobros aprobados de ventas (no transferencias entre cuentas ni cargas de saldo).
 // Solo ventas online por Checkout Pro: fuera los cobros en persona (Point, QR, caja) y las transferencias o cargas de saldo.
-export const esCheckoutOnline = (p) => !p.pid && !/POINT|INSTORE|QR|PIX|MONEY_TRANSFER|ACCOUNT_FUND/i.test(p.poi || "");
+// Las ventas de Mercado Libre que entran a la misma cuenta NO son de la tienda: se excluyen siempre.
+export const esMeli = (p) => /MELI|MERCADOLIBRE/i.test(p.mk || "") || /mercadolibre/i.test(p.ot || "");
+export const esCheckoutOnline = (p) => !esMeli(p) && !p.pid && !/POINT|INSTORE|QR|PIX|MONEY_TRANSFER|ACCOUNT_FUND/i.test(p.poi || "");
 export const esCobroVenta = (p) => (p.op === "regular_payment" || !p.op) && esCheckoutOnline(p) && (p.st === "approved" || p.st === "refunded" || p.st === "charged_back");
 export function mpCobros(pays, from, to) {
   if (!pays || !pays.length) return null;

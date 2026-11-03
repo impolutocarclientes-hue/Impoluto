@@ -89,7 +89,8 @@ test("Mercado Pago: comisión real reemplaza la estimada y separa retenciones", 
 
 test("Mercado Pago: solo cuenta ventas online de Checkout Pro", () => {
   const base = { id: "x", c: "2026-10-10T15:00:00.000-03:00", a: "2026-10-10T15:00:00.000-03:00", st: "approved", op: "regular_payment", monto: 1000, comision: 100, retenciones: 0, neto: 900, devuelto: 0 };
-  const r = M.mpCobros([base, { ...base, id: "pos", poi: "POINT" }, { ...base, id: "qr", pid: "123" }, { ...base, id: "tr", op: "money_transfer" }], "2026-10-10", "2026-10-10");
+  const r = M.mpCobros([base, { ...base, id: "pos", poi: "POINT" }, { ...base, id: "qr", pid: "123" }, { ...base, id: "tr", op: "money_transfer" },
+    { ...base, id: "meli1", mk: "MELI", monto: 50000, comision: 9000 }, { ...base, id: "meli2", ot: "mercadolibre", monto: 30000, comision: 5000 }], "2026-10-10", "2026-10-10");
   assert.equal(r.n, 1);
   assert.equal(r.comision, 100);
 });

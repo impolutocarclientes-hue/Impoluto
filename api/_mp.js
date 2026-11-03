@@ -43,6 +43,10 @@ export function compactPayment(p) {
     // De dónde vino el cobro: Checkout Pro (online) o en persona (Point, QR), etc.
     poi: String((p.point_of_interaction && p.point_of_interaction.type) || ""),
     pid: p.pos_id || p.store_id || null,
+    // Marketplace: "MELI" = venta de Mercado Libre (no es de la tienda). "NONE" = cobro propio (Checkout Pro).
+    mk: String(p.marketplace || ""),
+    ot: String((p.order && p.order.type) || ""),
+    oid: p.order && p.order.id ? String(p.order.id) : null,
   };
 }
 
