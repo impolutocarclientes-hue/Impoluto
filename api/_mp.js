@@ -59,3 +59,17 @@ export async function fetchPayments(token, since, until = new Date(), windowDays
   }
   return out;
 }
+
+// OAuth: cambia el código de la autorización por un token (y lo renueva antes de que venza).
+async function oauthToken(body) {
+  const r = await fetch(API + "/oauth/token", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) throw new Error("Mercado Pago no dio el acceso: " + (j.message || j.error || r.status));
+  return j;
+}
+export function exchangeCode(app, code, redirectUri) {
+  return oauthToken({ client_id: app.clientId, client_secret: app.clientSecret, grant_type: "authorization_code", code, redirect_uri: redirectUri });
+}
+export function refreshToken(app, refresh) {
+  return oauthToken({ client_id: app.clientId, client_secret: app.clientSecret, grant_type: "refresh_token", refresh_token: refresh });
+}

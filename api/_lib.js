@@ -24,7 +24,6 @@ export async function getSecrets() {
     out.shopify = { shop: process.env.SHOPIFY_SHOP, clientId: process.env.SHOPIFY_CLIENT_ID, clientSecret: process.env.SHOPIFY_CLIENT_SECRET };
   if (process.env.META_TOKEN && process.env.META_AD_ACCOUNT)
     out.meta = { token: process.env.META_TOKEN, accounts: process.env.META_AD_ACCOUNT.split(",").map((s) => s.trim()).filter(Boolean) };
-  if (process.env.MP_ACCESS_TOKEN) out.mp = { token: process.env.MP_ACCESS_TOKEN };
   return out;
 }
 export function safeParse(v) { try { return JSON.parse(v); } catch { return v; } }

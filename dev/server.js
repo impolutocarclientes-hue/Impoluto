@@ -52,7 +52,7 @@ const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".
 http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://x");
   if (u.pathname.startsWith("/api/")) {
-    const name = u.pathname.slice(5).replace(/[^a-z_]/gi, "");
+    const name = u.pathname.slice(5).replace(/[^a-z_-]/gi, "");
     let mod; try { mod = await import(path.join(ROOT, "api", name + ".js")); } catch { res.statusCode = 404; return res.end("no"); }
     req.query = Object.fromEntries(u.searchParams);
     const r = res;

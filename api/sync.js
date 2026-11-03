@@ -1,7 +1,8 @@
 import { redis, ORDERS, ADS, ADMETA, MPPAY, isAuthed, isCron, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
 import { fetchOrders, fetchSessions } from "./_shopify.js";
 import { insightsByDay, frequency7d, campaigns, accountInfo } from "./_meta.js";
-import { fetchPayments } from "./_mp.js";
+import { fetchPayments, refreshToken } from "./_mp.js";
+import { SECRETS } from "./_lib.js";
 
 export const config = { maxDuration: 60 };
 
@@ -62,6 +63,14 @@ export async function syncMp(cfg, prev, opts = {}) {
   const since = opts.full || !prev || !prev.lastUpdated
     ? new Date(Date.now() - (Number(opts.days) || 60) * 864e5)
     : new Date(new Date(prev.lastUpdated).getTime() - 864e5);
+  // El token de la autorización dura 180 días: lo renovamos solos cuando falta un mes.
+  if (cfg.oauth && cfg.refresh && opts.app && cfg.exp && cfg.exp - Date.now() < 30 * 864e5) {
+    const t = await refreshToken(opts.app, cfg.refresh);
+    const scopes = String(t.scope || "").split(/[\s,]+/).filter(Boolean);
+    if (scopes.includes("write")) throw new Error("Mercado Pago devolvió un acceso con permiso de escritura: no lo usamos. Volvé a autorizar solo lectura.");
+    cfg = { ...cfg, token: t.access_token, refresh: t.refresh_token || cfg.refresh, exp: Date.now() + (Number(t.expires_in) || 15552000) * 1000 };
+    await redis.hset(SECRETS, { mp: JSON.stringify(cfg) });
+  }
   const pays = await fetchPayments(cfg.token, since);
   await hsetChunks(MPPAY, pays.map((p) => [p.id, p]));
   return { count: pays.length, lastUpdated: new Date().toISOString() };
@@ -101,7 +110,7 @@ export default async function handler(req, res) {
   }
   if ((which === "all" || which === "mp") && sec.mp) {
     try {
-      out.mp = await syncMp(sec.mp, prev.mp, body);
+      out.mp = await syncMp(sec.mp, prev.mp, { ...body, app: sec.mpApp });
       await setStatus("mp", { ...(st.mp || {}), ok: true, error: null });
     } catch (e) {
       out.mp = { error: e.message };
