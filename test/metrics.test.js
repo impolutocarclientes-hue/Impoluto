@@ -65,3 +65,24 @@ test("día argentino", () => {
   assert.equal(M.dayOf("2026-10-11T02:30:00Z"), "2026-10-10");
   assert.equal(M.dayOf("2026-10-11T03:30:00Z"), "2026-10-11");
 });
+
+test("Mercado Pago: comisión real reemplaza la estimada y separa retenciones", () => {
+  const o1 = order(1, "2026-10-10", 1, 42990);
+  const pay = { id: "p1", c: "2026-10-10T15:00:00.000-03:00", a: "2026-10-10T15:00:01.000-03:00", rel: "2026-10-24T15:00:00.000-03:00", rs: "pending", st: "approved", op: "regular_payment", monto: 42990, devuelto: 0, comision: 3000, retenciones: 1000, neto: 38990, cu: 1 };
+  const base = { orders: [o1], ads: [], meta: {}, costos, prods };
+  const sin = M.resumen(base, "2026-10-10", "2026-10-10");
+  const con = M.resumen({ ...base, pays: [pay] }, "2026-10-10", "2026-10-10");
+  assert.equal(con.mp, 3000);
+  assert.equal(con.mpReal.retenciones, 1000);
+  const k = 0.21 / 1.21;
+  assert.ok(Math.abs((con.ganancia - sin.ganancia) - (sin.mp - 3000) * (1 - k)) < 1e-6);
+  const serie = M.serieDiaria({ ...base, pays: [pay] }, "2026-10-10", "2026-10-10");
+  assert.ok(Math.abs(serie[0].ganancia - con.ganancia) < 1e-6);
+  const lib = M.mpALiberar([pay], "2026-10-12T00:00:00Z");
+  assert.equal(lib.total, 38990);
+  assert.equal(M.mpALiberar([pay], "2026-10-25T00:00:00Z").total, 0);
+  // En la caja, la plata entra el día que se libera, no el día de la venta
+  const cj = M.caja({ ...base, pays: [pay], gastos: [], movs: [] }, "2026-10-27", 3);
+  const sem = cj.semanas.find((w) => w.desde <= "2026-10-24" && w.hasta >= "2026-10-24");
+  assert.equal(sem.det.ventas, 42990);
+});

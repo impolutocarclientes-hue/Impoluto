@@ -1,5 +1,5 @@
 // Datos inventados con la forma real de Impoluto para probar las pantallas.
-import { DOCS, ORDERS, ADS, ADMETA, SECRETS, STATUS } from "../api/_lib.js";
+import { DOCS, ORDERS, ADS, ADMETA, SECRETS, STATUS, MPPAY } from "../api/_lib.js";
 
 let s = 7;
 const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
@@ -31,6 +31,16 @@ export async function seed(redis) {
       const oid = String(id++);
       orders[oid] = { id: oid, n: "#" + (1000 + id - 5000), c: c.toISOString(), p: c.toISOString(), u: c.toISOString(), x, t: false, f, g: rnd() < 0.08 ? "manual" : "mercado_pago_cuotas", s: "web", tot, cur: tot, disc: Math.round(OFF[u] * 0.3), ship: 0, ref: 0, dc: rnd() < 0.05 ? ["BIENVENIDO10"] : [], li };
     }
+  }
+  // Cobros de Mercado Pago de los pedidos pagados (no los de transferencia)
+  const pays = {};
+  for (const o of Object.values(orders)) {
+    if (o.f !== "PAID" || o.x || o.g === "manual") continue;
+    const cuotas = o.li[0].q >= 2;
+    const comision = Math.round(o.tot * (cuotas ? 0.155 : 0.064));
+    const retenciones = Math.round(o.tot * 0.03);
+    const rel = new Date(Date.parse(o.c) + (cuotas ? 0 : 14) * 864e5).toISOString();
+    pays["mp" + o.id] = { id: "mp" + o.id, c: o.c, a: o.c, u: o.c, rel, rs: Date.parse(rel) < Date.now() ? "released" : "pending", st: "approved", op: "regular_payment", pm: "visa", pt: "credit_card", cu: cuotas ? 3 : 1, monto: o.tot, neto: o.tot - comision - retenciones, devuelto: 0, comision, retenciones, fees: [], ref: "", desc: "" };
   }
   const ads = {};
   const ADS_DEF = [
@@ -72,10 +82,11 @@ export async function seed(redis) {
   const j = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, JSON.stringify(v)]));
   await redis.hset(ORDERS, j(orders));
   await redis.hset(ADS, j(ads));
+  await redis.hset(MPPAY, j(pays));
   await redis.hset(DOCS, j(docs));
   await redis.hset(ADMETA, j({ currency: "USD", freq: { ad: { 111: 1.29, 112: 1.33, 113: 1.28, 114: 1.22, 115: 1.12, 116: 1.37, 117: 1.13, 118: 1.46 }, camp: { C1: 1.56, C2: 1.3 } }, campaigns: { C1: { n: "Impoluto chapa 24/10/2026", st: "ACTIVE" }, C2: { n: "Escala Impoluto CBO", st: "ACTIVE" } } }));
-  await redis.hset(SECRETS, j({ shopify: { shop: "impolutocar.myshopify.com", clientId: "x".repeat(32), clientSecret: "dev" }, meta: { token: "dev", accounts: ["act_123"] } }));
+  await redis.hset(SECRETS, j({ shopify: { shop: "impolutocar.myshopify.com", clientId: "x".repeat(32), clientSecret: "dev" }, meta: { token: "dev", accounts: ["act_123"] }, mp: { token: "APP_USR-dev", userId: 1 } }));
   const now = new Date().toISOString();
-  await redis.hset(STATUS, j({ shopify: { ok: true, name: "Impoluto", currency: "ARS", at: now }, meta: { ok: true, names: ["Impoluto Ads"], currency: "USD", at: now }, sync: { shopify: { lastUpdated: now, at: now }, meta: { lastDay: iso(today), at: now } } }));
+  await redis.hset(STATUS, j({ shopify: { ok: true, name: "Impoluto", currency: "ARS", at: now }, meta: { ok: true, names: ["Impoluto Ads"], currency: "USD", at: now }, mp: { ok: true, name: "IMPOLUTOCAR", at: now }, sync: { shopify: { lastUpdated: now, at: now }, meta: { lastDay: iso(today), at: now }, mp: { lastUpdated: now, at: now } } }));
   console.log("seed:", Object.keys(orders).length, "pedidos ·", Object.keys(ads).length, "filas de anuncios");
 }

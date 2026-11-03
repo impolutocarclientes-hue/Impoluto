@@ -95,8 +95,32 @@ function fijosEnRango(cfg, from, to) {
   return { total: sum(eachDay(from, to), porDia), porDia, mensual };
 }
 
+// ---------- Mercado Pago ----------
+// Cobros aprobados de ventas (no transferencias entre cuentas ni cargas de saldo).
+export const esCobroVenta = (p) => (p.op === "regular_payment" || !p.op) && (p.st === "approved" || p.st === "refunded" || p.st === "charged_back");
+export function mpCobros(pays, from, to) {
+  if (!pays || !pays.length) return null;
+  const l = pays.filter((p) => esCobroVenta(p) && (() => { const d = dayOf(p.a || p.c); return d >= from && d <= to; })());
+  return {
+    n: l.length,
+    monto: sum(l, (p) => n(p.monto)), devuelto: sum(l, (p) => n(p.devuelto)), neto: sum(l, (p) => n(p.neto)),
+    comision: sum(l, (p) => n(p.comision)), retenciones: sum(l, (p) => n(p.retenciones)),
+    pct: (() => { const m = sum(l, (p) => n(p.monto)); return m ? sum(l, (p) => n(p.comision)) / m : 0; })(),
+    cuotas: l.filter((p) => n(p.cu) > 1).length,
+  };
+}
+// Plata cobrada que Mercado Pago todavía no liberó.
+export function mpALiberar(pays, ahoraISO = new Date().toISOString()) {
+  if (!pays || !pays.length) return null;
+  const ahora = Date.parse(ahoraISO);
+  const l = pays.filter((p) => p.st === "approved" && esCobroVenta(p) && p.rel && Date.parse(p.rel) > ahora && p.rs !== "released");
+  const porDia = {};
+  l.forEach((p) => { const d = dayOf(p.rel); porDia[d] = (porDia[d] || 0) + n(p.neto); });
+  return { total: sum(l, (p) => n(p.neto)), n: l.length, porDia: Object.entries(porDia).sort().map(([d, v]) => ({ d, v })) };
+}
+
 // ---------- Resumen de un período ----------
-export function resumen({ orders, ads, meta, costos, prods }, from, to) {
+export function resumen({ orders, ads, meta, costos, prods, pays }, from, to) {
   const cfg = costosCfg(costos);
   const enRango = orders.filter((o) => { const d = dayOf(o.c); return d >= from && d <= to && !o.t; });
   const por = { pagado: [], pendiente: [], vencido: [], cancelado: [], devuelto: [] };
@@ -111,9 +135,18 @@ export function resumen({ orders, ads, meta, costos, prods }, from, to) {
   const spendBase = spendCuenta * conv.k;
   const anuncios = spendBase * conv.recargo;
   const fijos = fijosEnRango(cfg, from, to);
-  const margenAntes = T("margen");
+  // Con Mercado Pago conectado usamos la comisión real de los cobros en vez del % estimado.
+  const real = mpCobros(pays, from, to);
+  const mpEst = T("mp");
+  const mpUsado = real ? real.comision : mpEst;
+  const ivaK = cfg.regimen === "mono" ? 0 : 0.21 / 1.21; // la comisión trae IVA que descontás
+  const ajusteMp = real ? (mpEst - mpUsado) : 0;
+  const ivaCredito = T("ivaCredito") - ajusteMp * ivaK;
+  const ivaPagar = T("ivaDebito") - ivaCredito;
+  const cobroImp = mpUsado + T("shopify") + T("iibb") + ivaPagar;
+  const margenAntes = T("margen") + ajusteMp * (1 - ivaK);
   const ganancia = margenAntes - anuncios - fijos.total;
-  const netas = ventas - T("producto") - T("envio") - T("armado") - T("mp") - T("shopify");
+  const netas = ventas - T("producto") - T("envio") - T("armado") - mpUsado - T("shopify");
   const nPag = pagados.length;
   const units = sum(filas, (f) => sum(f.o.li, (l) => n(l.cq)));
   const dineroPor = margenAntes - fijos.total; // lo que queda para pagar anuncios
@@ -127,9 +160,9 @@ export function resumen({ orders, ads, meta, costos, prods }, from, to) {
     devueltos: { n: por.devuelto.length, monto: sum(por.devuelto, (o) => n(o.tot)) },
     ventas, netas, units,
     producto: T("producto"), envio: T("envio"), armado: T("armado"),
-    mp: T("mp"), shopify: T("shopify"), iibb: T("iibb"),
-    ivaDebito: T("ivaDebito"), ivaCredito: T("ivaCredito"), ivaPagar: T("ivaPagar"),
-    cobroImp: T("cobroImp"), margenAntes,
+    mp: mpUsado, mpEstimado: mpEst, mpReal: real, shopify: T("shopify"), iibb: T("iibb"),
+    ivaDebito: T("ivaDebito"), ivaCredito, ivaPagar,
+    cobroImp, margenAntes,
     spendCuenta, spendBase, anuncios, monedaAds: conv.usd ? "USD" : "ARS",
     fijos: fijos.total, fijosMensual: fijos.mensual,
     ganancia, margen: ventas ? ganancia / ventas : 0,
@@ -174,6 +207,14 @@ export function serieDiaria(ctx, from, to) {
     dias[d].ventas += c.venta; dias[d].margen += c.margen; dias[d].pedidos++;
   });
   ctx.ads.forEach((a) => { if (dias[a.d]) dias[a.d].anuncios += n(a.sp) * conv.k * conv.recargo; });
+  if (ctx.pays && ctx.pays.length) {
+    // Igual que en el resumen: comisión real de Mercado Pago en vez de la estimada.
+    const ivaK = cfg.regimen === "mono" ? 0 : 0.21 / 1.21;
+    const est = {}, real = {};
+    ctx.orders.forEach((o) => { const d = dayOf(o.c); if (dias[d] && estado(o) === "pagado") est[d] = (est[d] || 0) + costoPedido(o, cfg, ctx.prods).mp; });
+    ctx.pays.forEach((p) => { if (!esCobroVenta(p)) return; const d = dayOf(p.a || p.c); if (dias[d]) real[d] = (real[d] || 0) + n(p.comision); });
+    Object.keys(dias).forEach((d) => { dias[d].margen += ((est[d] || 0) - (real[d] || 0)) * (1 - ivaK); });
+  }
   return Object.values(dias).map((x) => ({ ...x, ganancia: x.margen - x.anuncios - x.fijos }));
 }
 
@@ -394,13 +435,22 @@ export function caja(ctx, hoy, semanas = 8, CAJA = "Caja Impoluto") {
   for (let i = 0; i < semanas; i++) { const s = addDays(desde, 7 * i); W[s] = { desde: s, hasta: addDays(s, 6), entro: 0, salio: 0, det: { ventas: 0, comisiones: 0, gastos: 0, anuncios: 0, aportes: 0, retiros: 0 } }; }
   const wk = (d) => W[lunes(d)];
   const pagaCaja = cfg.metaPaga === CAJA || cfg.metaPaga === "Caja";
-  // Entra: lo que cobrás de Shopify, ya sin la comisión de Mercado Pago y de Shopify (Mercado Pago acredita al toque).
+  const conMp = !!(ctx.pays && ctx.pays.length);
+  // Entra: lo que cobrás. Con Mercado Pago conectado, lo que liberó de verdad (neto, el día que se libera);
+  // si no, lo que cobra Shopify ya sin comisiones (suponiendo que Mercado Pago acredita al toque).
   ctx.orders.forEach((o) => {
     if (estado(o) !== "pagado") return;
     const d = dayOf(o.p || o.c), w = wk(d);
     if (!w || d > hoy) return;
     const c = costoPedido(o, cfg, ctx.prods);
+    if (conMp && !c.transfer) { w.salio += c.shopify; w.det.comisiones += c.shopify; return; }
     w.entro += c.venta - c.mp - c.shopify; w.det.ventas += c.venta; w.det.comisiones += c.mp + c.shopify;
+  });
+  if (conMp) ctx.pays.forEach((p) => {
+    if (p.st !== "approved" || !esCobroVenta(p)) return;
+    const d = dayOf(p.rel || p.a || p.c), w = wk(d);
+    if (!w || d > hoy) return;
+    w.entro += n(p.neto); w.det.ventas += n(p.monto); w.det.comisiones += n(p.monto) - n(p.neto);
   });
   (ctx.gastos || []).forEach((g) => {
     const w = wk(g.fecha); if (!w || g.fecha > hoy) return;
@@ -428,7 +478,9 @@ export function saldoCaja(ctx, hoy, saldoInicial = 0, CAJA = "Caja Impoluto") {
   const metaAuto = !!(ctx.ads && ctx.ads.length);
   const pagaCaja = cfg.metaPaga === CAJA || cfg.metaPaga === "Caja";
   let s = n(saldoInicial);
-  ctx.orders.forEach((o) => { if (estado(o) === "pagado" && dayOf(o.p || o.c) <= hoy) { const c = costoPedido(o, cfg, ctx.prods); s += c.venta - c.mp - c.shopify; } });
+  const conMp = !!(ctx.pays && ctx.pays.length);
+  ctx.orders.forEach((o) => { if (estado(o) === "pagado" && dayOf(o.p || o.c) <= hoy) { const c = costoPedido(o, cfg, ctx.prods); s += conMp && !c.transfer ? -c.shopify : c.venta - c.mp - c.shopify; } });
+  if (conMp) ctx.pays.forEach((p) => { if (p.st === "approved" && esCobroVenta(p) && dayOf(p.rel || p.a || p.c) <= hoy) s += n(p.neto); });
   (ctx.gastos || []).forEach((g) => { if (g.fecha <= hoy && g.quien === CAJA && !(metaAuto && pagaCaja && g.catId === "meta")) s -= n(g.monto); });
   if (metaAuto && pagaCaja) ctx.ads.forEach((a) => { if (a.d <= hoy) s -= n(a.sp) * conv.k * conv.recargo; });
   (ctx.movs || []).forEach((m) => { if (m.fecha <= hoy) s += m.tipo === "retiro" ? -n(m.monto) : n(m.monto); });
@@ -446,7 +498,7 @@ export function impuestosMes(ctx, mes /* AAAA-MM */) {
   const ri = cfg.regimen !== "mono";
   const debitoTotal = ri ? iva(r.ventas) : 0;
   const debito = debitoTotal * (1 - n(cfg.beneficioIva) / 100);
-  const creditoComisiones = ri ? iva(r.mp + r.shopify) : 0;
+  const creditoComisiones = ri ? iva(r.mp + r.shopify) : 0; // con Mercado Pago conectado, r.mp es la comisión real
   const ivaPagar = ri ? debito - creditoComisiones - creditoGastos : 0;
   const gananciaAntes = r.ganancia;
   const ganancias = Math.max(0, gananciaAntes) * (n(cfg.ganPct) / 100);
@@ -456,6 +508,7 @@ export function impuestosMes(ctx, mes /* AAAA-MM */) {
     creditoComisiones, creditoGastos, ivaPagar,
     iibb: r.iibb, ganancias, gananciaAntes, gananciaNeta: gananciaAntes - ganancias,
     estimadoEnDashboard: r.ivaPagar,
+    retencionesMp: r.mpReal ? r.mpReal.retenciones : null,
   };
 }
 

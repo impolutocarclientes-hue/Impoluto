@@ -11,6 +11,7 @@ export const COOKIE = "imp_auth";
 export const ORDERS = "impoluto:orders";      // id de pedido → pedido compacto
 export const ADS = "impoluto:ads";            // "AAAA-MM-DD|adId" → métricas del día
 export const ADMETA = "impoluto:admeta";      // datos sueltos de Meta (frecuencia 7 días, estado de campañas, moneda)
+export const MPPAY = "impoluto:mp";           // id de cobro de Mercado Pago → cobro compacto
 export const SECRETS = "impoluto:secrets";    // credenciales: solo las lee el servidor
 export const STATUS = "impoluto:status";      // estado de cada conexión y último sync
 
@@ -23,6 +24,7 @@ export async function getSecrets() {
     out.shopify = { shop: process.env.SHOPIFY_SHOP, clientId: process.env.SHOPIFY_CLIENT_ID, clientSecret: process.env.SHOPIFY_CLIENT_SECRET };
   if (process.env.META_TOKEN && process.env.META_AD_ACCOUNT)
     out.meta = { token: process.env.META_TOKEN, accounts: process.env.META_AD_ACCOUNT.split(",").map((s) => s.trim()).filter(Boolean) };
+  if (process.env.MP_ACCESS_TOKEN) out.mp = { token: process.env.MP_ACCESS_TOKEN };
   return out;
 }
 export function safeParse(v) { try { return JSON.parse(v); } catch { return v; } }

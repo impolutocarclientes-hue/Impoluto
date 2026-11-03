@@ -67,7 +67,7 @@ const socios = () => (Array.isArray(S.app.socios) && S.app.socios.length >= 2 ? 
 const cats = () => (Array.isArray(S.app.cats) && S.app.cats.length ? S.app.cats : DEF_CATS);
 const catOf = (g) => cats().find((c) => c.id === g.catId) || cats().find((c) => c.name === g.cat) || { id: "otros", name: g.cat || "Otros", color: "#8C7F72" };
 const cfg = () => M.costosCfg(S.costos);
-const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, costos: S.costos, prods: S.prods, gastos: S.gastos, movs: S.movs });
+const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: S.costos, prods: S.prods, gastos: S.gastos, movs: S.movs });
 const money = (v) => (S.cur === "USD" ? usd(nn(v) / nn(cfg().dolar || 1)) : ars(v));
 
 function rangeOf(p) {
@@ -109,7 +109,7 @@ async function sync(which = "all", extra = {}) {
   S.syncing = true; render();
   try {
     const r = await api("/api/sync", { method: "POST", body: JSON.stringify({ which, ...extra }) });
-    const errs = [r.shopify && r.shopify.error, r.meta && r.meta.error].filter(Boolean);
+    const errs = [r.shopify && r.shopify.error, r.meta && r.meta.error, r.mp && r.mp.error].filter(Boolean);
     toast(errs.length ? "Sync con errores: " + errs[0] : "Datos actualizados");
   } catch (e) { toast("No se pudo sincronizar: " + e.message); }
   S.syncing = false;
@@ -186,15 +186,15 @@ const VIEWS = [
 function sideHTML() {
   const c = S.conn || {};
   const dot = (x) => (x && x.connected ? (x.ok === false || x.error ? "bad" : "ok") : "");
-  const last = c.sync && (c.sync.shopify || c.sync.meta) ? new Date((c.sync.shopify || c.sync.meta).at) : null;
+  const last = c.sync && (c.sync.shopify || c.sync.meta || c.sync.mp) ? new Date((c.sync.shopify || c.sync.meta || c.sync.mp).at) : null;
   return `<div class="brand"><i></i>Impoluto</div><h6>Analítica</h6>${VIEWS.slice(0, 5).map(navBtn).join("")}<h6>Operación</h6>${VIEWS.slice(5).map(navBtn).join("")}
-  <div class="foot"><div><span class="dot ${dot(c.shopify)}"></span>Shopify ${c.shopify && c.shopify.connected ? "" : "· sin conectar"}</div><div><span class="dot ${dot(c.meta)}"></span>Meta Ads ${c.meta && c.meta.connected ? "" : "· sin conectar"}</div>
+  <div class="foot"><div><span class="dot ${dot(c.shopify)}"></span>Shopify ${c.shopify && c.shopify.connected ? "" : "· sin conectar"}</div><div><span class="dot ${dot(c.meta)}"></span>Meta Ads ${c.meta && c.meta.connected ? "" : "· sin conectar"}</div><div><span class="dot ${dot(c.mp)}"></span>Mercado Pago ${c.mp && c.mp.connected ? "" : "· sin conectar"}</div>
   <div>${last ? "Actualizado " + last.toLocaleString("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "Sin sincronizar"}</div><button class="ctl" data-act="logout" style="justify-self:start">Cerrar sesión</button></div>`;
 }
 const navBtn = ([id, label, ic]) => `<button data-nav="${id}" aria-current="${S.view === id}">${svg(ic)}${esc(label)}</button>`;
 
 function topRight() {
-  const can = S.conn && (S.conn.shopify.connected || S.conn.meta.connected);
+  const can = S.conn && (S.conn.shopify.connected || S.conn.meta.connected || (S.conn.mp && S.conn.mp.connected));
   return `<div class="seg" role="group"><button data-cur="ARS" aria-pressed="${S.cur === "ARS"}">ARS</button><button data-cur="USD" aria-pressed="${S.cur === "USD"}">USD</button></div>
   ${can ? `<button class="ctl" data-act="sync" ${S.syncing ? "disabled" : ""}>${S.syncing ? "Sincronizando…" : "↻ Actualizar"}</button>` : `<button class="ctl pri" data-nav="config">Conectar Shopify y Meta</button>`}`;
 }
@@ -210,6 +210,7 @@ function banners() {
   if (c && !c.shopify.connected) out.push('<p class="banner info">Conectá tu tienda de Shopify para ver las ventas solas. Está en <a href="#" data-nav="config">Configuración → Conexiones</a>.</p>');
   if (c && c.shopify.connected && c.shopify.error) out.push(`<p class="banner bad">Shopify: ${esc(c.shopify.error)}</p>`);
   if (c && c.meta.connected && c.meta.error) out.push(`<p class="banner bad">Meta: ${esc(c.meta.error)}</p>`);
+  if (c && c.mp && c.mp.connected && c.mp.error) out.push(`<p class="banner bad">Mercado Pago: ${esc(c.mp.error)}</p>`);
   if (c && c.meta.connected && c.meta.savedAt && S.costos.metaVence) {
     const left = Math.ceil((Date.parse(S.costos.metaVence) - Date.now()) / 864e5);
     if (left <= 10) out.push(`<p class="banner warn">El acceso a Meta vence en ${left} días. Generá uno nuevo y pegalo en Configuración → Conexiones.</p>`);
@@ -255,6 +256,10 @@ function resumenHTML(r, p, serie) {
   if (r.anuncios && r.pagados) frases.push(`${ok(r.cpaUsd <= r.cpaMaxUsd)}Cada venta te costó <b>${usd1(r.cpaUsd)}</b> en anuncios y podés pagar hasta <b>${usd1(r.cpaMaxUsd)}</b> sin perder.`);
   if (r.pagados) frases.push(`<span class="dot"></span>Cada pedido te deja <b>${money(r.aov)}</b> en promedio y se llevan <b>${x2(r.unidadesPorPedido).replace(",00", "")}</b> unidades.`);
   if (r.pendientes.n + r.vencidos.n) frases.push(`${ok(false)}Quedaron <b>${money(r.pendientes.monto + r.vencidos.monto)}</b> sin cobrar en ${int(r.pendientes.n + r.vencidos.n)} pedidos (pendientes o vencidos).`);
+  if (r.mpReal) {
+    const lib = M.mpALiberar(S.data.pays);
+    frases.push(`<span class="dot"></span>Mercado Pago te cobró <b>${pct(r.mpReal.pct)}</b> de comisión real${r.mpReal.retenciones ? ` y te retuvo <b>${money(r.mpReal.retenciones)}</b> de impuestos (a cuenta, no es costo)` : ""}.${lib && lib.total ? ` Tenés <b>${money(lib.total)}</b> por liberar.` : ""}`);
+  }
   const top = M.ofertas(ctx(), S.from, S.to).filter((o) => o.pedidos >= 3).sort((a, b) => b.antes - a.antes)[0];
   if (top) frases.push(`<span class="dot ok"></span>La oferta que más plata te deja por venta es la de <b>${top.oferta}${top.oferta === 3 ? " o más" : ""} ${top.oferta === 1 ? "unidad" : "unidades"}</b>: ${money(top.antes)} antes del anuncio.`);
   return `<div class="hero"><span class="muted">${shortDate(S.from)} – ${shortDate(S.to)}</span><span class="big ${gana ? "" : "down"}" style="font-size:30px">${titulo}</span><p class="muted small">${vsAntes}</p></div>
@@ -309,7 +314,7 @@ function viewDashboard() {
       ${items.map(([l, v, c]) => `<div class="row"><span>${l}</span><div class="track"><div class="fill" style="width:${Math.min(100, (v / max) * 100)}%;background:${c}"></div></div><b>${money(v)}</b></div>`).join("")}
       <div class="row"><span><b style="text-align:left">Salió</b></span><div></div><b>${money(salio)}</b></div></div>
       <details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Ver la cuenta</summary><table class="tbl" style="margin-top:8px">
-      ${[["Mercado Pago", r.mp], ["Shopify", r.shopify], ["Ingresos brutos", r.iibb], ["IVA de venta (lo que pagás)", r.ivaDebito], ["IVA que descontás", -r.ivaCredito], ["IVA a pagar", r.ivaPagar], ["Envío", r.envio], ["Armado", r.armado]].map(([l, v]) => `<tr><td>${l}</td><td class="r">${money(v)}</td></tr>`).join("")}</table></details></div></div>`);
+      ${[[r.mpReal ? "Mercado Pago (real)" : "Mercado Pago (estimado)", r.mp], ["Shopify", r.shopify], ["Ingresos brutos", r.iibb], ["IVA de venta (lo que pagás)", r.ivaDebito], ["IVA que descontás", -r.ivaCredito], ["IVA a pagar", r.ivaPagar], ["Envío", r.envio], ["Armado", r.armado]].map(([l, v]) => `<tr><td>${l}</td><td class="r">${money(v)}</td></tr>`).join("")}</table></details></div></div>`);
   }
   if (show("tienda")) {
     const cards = [
@@ -343,7 +348,8 @@ function viewDashboard() {
     const cards = [
       { label: "Producto", tip: "Unidades vendidas × el costo que cargaste de cada producto.", value: money(r.producto), sub: r.ventas ? pct(r.producto / r.ventas) + " de la facturación" : "", src: "mix" },
       { label: "Envío y armado", value: money(r.envio + r.armado), sub: r.pagados ? money((r.envio + r.armado) / r.pagados) + " por pedido" : "", src: "mix" },
-      { label: "Mercado Pago", tip: "Comisión de cobro, con o sin cuotas según la oferta.", value: money(r.mp), sub: r.ventas ? pct(r.mp / r.ventas) : "", src: "mix" },
+      { label: "Mercado Pago", tip: r.mpReal ? "Comisión real que te cobró Mercado Pago (sale de tus cobros)." : "Comisión estimada con el % que cargaste (conectá Mercado Pago para usar la real).", value: money(r.mp), sub: r.mpReal ? `real · ${pct(r.mpReal.pct)} de lo cobrado` : r.ventas ? `estimada · ${pct(r.mp / r.ventas)}` : "", src: "mix" },
+      ...(r.mpReal ? [{ label: "Retenciones de Mercado Pago", tip: "Impuestos que te retuvo Mercado Pago (IIBB, IVA, Ganancias). No son costo: son pagos a cuenta que descontás en tus declaraciones.", value: money(r.mpReal.retenciones), sub: "a cuenta de impuestos", src: "mix" }] : []),
       { label: "Shopify", tip: "Lo que se queda Shopify por venta.", value: money(r.shopify), src: "mix" },
       { label: "Ingresos brutos", value: money(r.iibb), src: "mix" },
       { label: "IVA a pagar", tip: "IVA de venta (con el beneficio) menos el IVA de comisiones, envío y lo que te facturan.", value: money(r.ivaPagar), src: "mix" },
@@ -420,10 +426,10 @@ function viewCaja() {
   const cj = M.caja(c, today, 10, CAJA);
   const saldo = M.saldoCaja(c, today, nn(S.app.saldoInicial), CAJA);
   let h = `<div class="content" style="padding-top:14px">${banners()}<div class="cols"><div class="hero"><span class="muted">Los próximos 30 días <span class="tag">supuesto</span></span><span class="big ${cj.proy.neto < 0 ? "down" : ""}">${money(cj.proy.neto)}</span><p>te quedarían si vendés y gastás como en los últimos 14 días.</p><p class="muted small">Entraría ${money(cj.proy.entra)} · saldría ${money(cj.proy.sale)}</p></div>
-    <div class="grid">${card({ label: "Caja hoy", tip: "Saldo inicial + lo cobrado (ya sin comisiones) + aportes − gastos que pagó la caja − anuncios − retiros.", value: money(saldo), tone: saldo < 0 ? "bad" : "", src: "mix" })}${card({ label: "Esta semana", value: money(cj.semanas[0].neto), sub: `Entró ${money(cj.semanas[0].entro)} · salió ${money(cj.semanas[0].salio)}`, src: "mix" })}</div></div>`;
+    <div class="grid">${card({ label: "Caja hoy", tip: "Saldo inicial + lo cobrado (ya sin comisiones) + aportes − gastos que pagó la caja − anuncios − retiros.", value: money(saldo), tone: saldo < 0 ? "bad" : "", src: "mix" })}${card({ label: "Esta semana", value: money(cj.semanas[0].neto), sub: `Entró ${money(cj.semanas[0].entro)} · salió ${money(cj.semanas[0].salio)}`, src: "mix" })}${(() => { const lib = M.mpALiberar(S.data.pays); return lib ? card({ label: "Por liberar en Mercado Pago", tip: "Cobros aprobados que Mercado Pago todavía no te liberó. Entran a la caja el día que se liberan.", value: money(lib.total), sub: lib.porDia.length ? lib.porDia.slice(0, 3).map((x) => `${shortDate(x.d)}: ${money(x.v)}`).join(" · ") : "nada pendiente", src: "mix" }) : ""; })()}</div></div>`;
   h += block("semanas", "Semana por semana", `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Semana</th><th class="r">Ventas cobradas</th><th class="r">Comisiones</th><th class="r">Aportes</th><th class="r">Gastos de la caja</th><th class="r">Anuncios</th><th class="r">Retiros</th><th class="r">Neto</th></tr></thead><tbody>
     ${cj.semanas.map((w, i) => `<tr><td>${i === 0 ? "Esta semana" : i === 1 ? "La semana pasada" : shortDate(w.desde) + " al " + shortDate(w.hasta)}</td><td class="r">${money(w.det.ventas)}</td><td class="r">${w.det.comisiones ? "−" + money(w.det.comisiones) : "–"}</td><td class="r">${w.det.aportes ? money(w.det.aportes) : "–"}</td><td class="r">${w.det.gastos ? "−" + money(w.det.gastos) : "–"}</td><td class="r">${w.det.anuncios ? "−" + money(w.det.anuncios) : "–"}</td><td class="r">${w.det.retiros ? "−" + money(w.det.retiros) : "–"}</td><td class="r ${w.neto < 0 ? "down" : "up"}"><b>${money(w.neto)}</b></td></tr>`).join("")}</tbody></table></div>
-    <p class="note" style="margin-top:8px">Cómo se arma: entra lo que cobrás en Shopify (Mercado Pago acredita al toque) ya sin comisiones, más los aportes. Sale lo que pagó la caja (gastos cargados con "pagó: ${CAJA}"), los anuncios de Meta${cfg().metaPaga === "Caja" ? "" : " (no: los paga " + esc(cfg().metaPaga) + ")"} y los retiros. Los impuestos no salen acá hasta que los cargues como gasto cuando los pagás.</p>`);
+    <p class="note" style="margin-top:8px">Cómo se arma: entra ${S.data.pays && S.data.pays.length ? "lo que Mercado Pago te libera (neto, el día que se libera) y las ventas por transferencia" : "lo que cobrás en Shopify (suponiendo que Mercado Pago acredita al toque) ya sin comisiones"}, más los aportes. Sale lo que pagó la caja (gastos cargados con "pagó: ${CAJA}"), los anuncios de Meta${cfg().metaPaga === "Caja" ? "" : " (no: los paga " + esc(cfg().metaPaga) + ")"} y los retiros. Los impuestos no salen acá hasta que los cargues como gasto cuando los pagás.</p>`);
   return h + "</div>";
 }
 
@@ -444,6 +450,7 @@ function viewImpuestos() {
     ["IVA a pagar", t.ivaPagar, t.ivaPagar < 0 ? "Negativo = saldo a favor para el mes que viene." : ""],
   ] : [["Ventas del mes", t.ventas, ""], ["IVA", 0, "En monotributo no pagás IVA aparte: va en la cuota."]];
   h += block("iva", "IVA · " + monthName(S.impMes), `<div class="tbl-wrap"><table class="tbl"><tbody>${rows.map(([l, v, n], i) => `<tr${i === rows.length - 1 ? ' style="font-weight:600"' : ""}><td>${esc(l)}${n ? ` <span class="muted small">· ${esc(n)}</span>` : ""}</td><td class="r">${money(v)}</td></tr>`).join("")}</tbody></table></div>`);
+  if (t.retencionesMp != null) h += `<p class="banner info">Mercado Pago te retuvo <b>${money(t.retencionesMp)}</b> de impuestos este mes. Son pagos a cuenta (IIBB, IVA o Ganancias): pasáselo a tu contador para que los descuente. El detalle está en Mercado Pago → Tu negocio → Impuestos.</p>`;
   h += block("otros", "Ingresos brutos y Ganancias", `<div class="grid">${card({ label: "Ingresos brutos", tip: `${nn(cfg().iibbPct)} % sobre las ventas.`, value: money(t.iibb), src: "mix" })}${card({ label: "Ganancia del mes", tip: "La del dashboard: ya descuenta IVA e IIBB.", value: money(t.gananciaAntes), tone: t.gananciaAntes < 0 ? "bad" : "", src: "mix" })}${card({ label: "Provisión de Ganancias", tip: `${nn(cfg().ganPct)} % de la ganancia, para guardar. Es una estimación: el número final lo calcula tu contador en la declaración anual.`, value: money(t.ganancias), src: "mix" })}${card({ label: "Ganancia neta", tip: "Ganancia menos la provisión de Ganancias. Es la que se reparte entre los socios.", value: money(t.gananciaNeta), tone: t.gananciaNeta < 0 ? "bad" : "good", src: "mix" })}</div>
     <p class="note" style="margin-top:8px">El dashboard estima el IVA pedido por pedido (con el envío y lo que te facturan según la configuración: ${money(t.estimadoEnDashboard)} este mes). Esta pantalla usa los gastos con Factura A que cargaste de verdad, así que es la que va para el contador.</p>`);
   return h + "</div>";
@@ -556,7 +563,7 @@ function viewConfig() {
     const estado = (x, okTxt) => `<span class="tag ${x.connected ? (x.error ? "bad" : "good") : ""}">${x.connected ? (x.error ? "Con error" : okTxt) : "Sin conectar"}</span>`;
     const ext = (url, txt) => `<a class="ctl" href="${url}" target="_blank" rel="noopener" style="text-decoration:none;justify-self:start">${txt} ↗</a>`;
 
-    h += `<p class="banner info">Las dos conexiones son <b>solo de lectura</b>: no instalan nada en tu tienda, no tocan tu píxel ni tus campañas. Solo leen ventas y gastos.</p>`;
+    h += `<p class="banner info">Las conexiones son <b>solo de lectura</b>: no instalan nada en tu tienda, no tocan tu píxel ni tus campañas. Solo leen ventas y gastos.</p>`;
     // ----- Shopify -----
     h += `<div class="card" style="display:grid;gap:14px"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">1 · Tu tienda de Shopify</h3>${estado(sh, "Conectada")}</div>`;
     if (sh.connected && !S.editSh) {
@@ -591,6 +598,21 @@ function viewConfig() {
           <div class="actions"><button class="ctl pri" data-act="me-save">Conectar Meta</button>${me.connected ? '<button class="ctl" data-act="edit-me">Cancelar</button>' : ""}</div>`)}
       </div>`;
     }
+    // ----- Mercado Pago -----
+    const mp = cn.mp || {};
+    const lastP = when(cn.sync && cn.sync.mp);
+    h += `</div><div class="card" style="display:grid;gap:14px"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">3 · Mercado Pago</h3>${estado(mp, "Conectado")}</div>`;
+    if (mp.connected && !S.editMp) {
+      h += `<p style="margin:0">${mp.error ? `<span class="down">${esc(mp.error)}</span>` : `Leyendo los cobros de <b>${esc(mp.name || "tu cuenta")}</b>${lastP ? ` · última actualización ${esc(lastP)}` : ""}. El resumen usa la comisión real, separa las retenciones y la caja cuenta la plata cuando se libera.`}</p>
+        <div class="actions"><button class="ctl" data-act="sync" ${S.syncing ? "disabled" : ""}>${S.syncing ? "Actualizando…" : "↻ Actualizar ahora"}</button><button class="ctl" data-act="edit-mp">Cambiar el token</button><button class="ctl" data-act="mp-del">Desconectar</button></div>`;
+    } else {
+      h += `<p class="note">Sirve para tener la <b>comisión real</b> de cada cobro (en vez del % estimado), las <b>retenciones</b> de impuestos y <b>cuándo te liberan la plata</b>.</p><div class="steps">
+        ${step(1, "Creá una aplicación en Mercado Pago <span class='muted'>(una sola vez)</span>", `${ext("https://www.mercadopago.com.ar/developers/panel/app", "Abrir Mercado Pago Developers")}<div>Entrá con la cuenta que cobra las ventas de Impoluto → <b>Crear aplicación</b>. Nombre: ${copy("Impoluto Numeros")}. Tipo: <b>Pagos online</b> → plataforma <b>Shopify</b> (o la opción que te ofrezca). Aceptá y creala.</div>`)}
+        ${step(2, "Copiá el Access Token de producción", `<div>Dentro de la app: <b>Credenciales de producción</b> (si te pide activarlas, completá rubro y sitio web ${copy("https://impolutocar.com")}). Copiá el <b>Access Token</b>: empieza con <code>APP_USR-</code>.</div>`)}
+        ${step(3, "Pegalo acá", `<div class="form"><label class="f"><span>Access Token</span><input class="in" id="mp-token" type="password" autocomplete="off" placeholder="APP_USR-…"><small>Mercado Pago no tiene tokens de solo lectura: la app lo usa solo para leer cobros, nunca para cobrar ni devolver. Lo guardamos bajo llave.</small></label></div>
+          <div class="actions"><button class="ctl pri" data-act="mp-save">Conectar Mercado Pago</button>${mp.connected ? '<button class="ctl" data-act="edit-mp">Cancelar</button>' : ""}</div>`)}
+      </div>`;
+    }
     h += `</div><p class="note">Se actualiza sola todos los días a las 6 de la mañana y cada vez que abrís la app (si pasó más de una hora).${cn.cron ? "" : " Falta la variable CRON_SECRET en Vercel para la actualización diaria."} <a href="#" data-act="sync-full">Volver a traer los últimos 60 días</a></p>`;
   }
   if (S.cfgSub === "costos") {
@@ -600,6 +622,7 @@ function viewConfig() {
       ${yn("mpCuotas", "¿Ofrecés cuotas sin interés?")}
       ${num("mpPctCuotas", "%", "0.1", "Mercado Pago con cuotas", "Con 3 cuotas sin interés suele ser 17 %.")}
       ${num("mpPctSin", "%", "0.1", "Mercado Pago sin cuotas", "Sin cuotas, 7 %. Fijate el tuyo en Mercado Pago › Tu negocio › Costos y cuotas.")}
+      ${(() => { const rr = M.mpCobros(S.data.pays, M.addDays(today, -29), today); return rr && rr.monto ? `<p class="banner info" style="grid-column:1/-1">Con Mercado Pago conectado, el resumen usa la comisión real. En los últimos 30 días fue <b>${pct(rr.pct)}</b> (${int(rr.cuotas)} de ${int(rr.n)} cobros en cuotas). Estos % se siguen usando para las ofertas y la calculadora.</p>` : ""; })()}
       <label class="f"><span>¿En qué ofertas hay cuotas?</span><div class="seg" style="width:100%">${[[1, "En todas"], [2, "Desde la 2"], [3, "Desde la 3"]].map(([v, l]) => `<button data-costv="mpDesde" data-val="${v}" aria-pressed="${nn(c.mpDesde) === v}">${l}</button>`).join("")}</div></label>
       ${num("shopifyPct", "%", "0.1", "Shopify", "Lo que se queda por cada venta.")}
       ${num("iibbPct", "%", "0.1", "Ingresos brutos", "El impuesto de tu provincia por vender.")}
@@ -780,6 +803,12 @@ document.addEventListener("click", async (e) => {
     else if (act === "sync") sync();
     else if (act === "edit-sh") { S.editSh = !S.editSh; render(); }
     else if (act === "edit-me") { S.editMe = !S.editMe; render(); }
+    else if (act === "edit-mp") { S.editMp = !S.editMp; render(); }
+    else if (act === "mp-save") {
+      t.disabled = true; t.textContent = "Conectando…";
+      const r = await api("/api/connect", { method: "POST", body: JSON.stringify({ which: "mp", token: $("#mp-token").value }) });
+      toast("Mercado Pago conectado: " + r.name); S.editMp = false; await loadConn(); sync("mp", { full: true });
+    }
     else if (act === "sync-full") sync("all", { full: true, days: 60 });
     else if (act === "g-save") await saveGasto(d.id);
     else if (act === "g-del") { await db.doc("gastos/" + d.id).delete(); closeModal(); toast("Gasto eliminado"); }
@@ -807,13 +836,13 @@ document.addEventListener("click", async (e) => {
       const r = await api("/api/connect", { method: "POST", body: JSON.stringify({ which: "meta", token: $("#me-token").value, accounts: $("#me-acc").value }) });
       toast("Meta conectado: " + r.names.join(", ")); S.editMe = false; await loadConn(); sync("meta", { full: true });
     }
-    else if (act === "sh-del" || act === "me-del") {
-      await api("/api/connect", { method: "DELETE", body: JSON.stringify({ which: act === "sh-del" ? "shopify" : "meta" }) });
+    else if (act === "sh-del" || act === "me-del" || act === "mp-del") {
+      await api("/api/connect", { method: "DELETE", body: JSON.stringify({ which: { "sh-del": "shopify", "me-del": "meta", "mp-del": "mp" }[act] }) });
       toast("Desconectado"); loadConn();
     }
   } catch (err) {
     toast(err.message || String(err));
-    if (act === "sh-save" || act === "me-save") render();
+    if (act === "sh-save" || act === "me-save" || act === "mp-save") render();
   }
 });
 
@@ -872,7 +901,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal
   subscribe();
   await Promise.all([loadData(), loadConn()]);
   const c = S.conn;
-  const last = c && c.sync ? Math.max(...[c.sync.shopify, c.sync.meta].filter(Boolean).map((x) => Date.parse(x.at)), 0) : 0;
-  if (c && (c.shopify.connected || c.meta.connected) && Date.now() - last > 3600e3) sync();
+  const last = c && c.sync ? Math.max(...[c.sync.shopify, c.sync.meta, c.sync.mp].filter(Boolean).map((x) => Date.parse(x.at)), 0) : 0;
+  if (c && (c.shopify.connected || c.meta.connected || (c.mp && c.mp.connected)) && Date.now() - last > 3600e3) sync();
   setInterval(() => { if (!document.hidden) loadData(); }, 5 * 60e3);
 })();

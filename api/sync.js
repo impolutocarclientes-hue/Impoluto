@@ -1,6 +1,7 @@
-import { redis, ORDERS, ADS, ADMETA, isAuthed, isCron, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
+import { redis, ORDERS, ADS, ADMETA, MPPAY, isAuthed, isCron, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
 import { fetchOrders, fetchSessions } from "./_shopify.js";
 import { insightsByDay, frequency7d, campaigns, accountInfo } from "./_meta.js";
+import { fetchPayments } from "./_mp.js";
 
 export const config = { maxDuration: 60 };
 
@@ -55,6 +56,17 @@ export async function syncMeta(cfg, prev, opts = {}) {
   return { rows: total, lastDay: until, currency: info.currency };
 }
 
+export async function syncMp(cfg, prev, opts = {}) {
+  // Primera vez: 60 días. Después: lo actualizado desde el último sync, con un día de margen
+  // (los cobros cambian de estado cuando se liberan o se devuelven).
+  const since = opts.full || !prev || !prev.lastUpdated
+    ? new Date(Date.now() - (Number(opts.days) || 60) * 864e5)
+    : new Date(new Date(prev.lastUpdated).getTime() - 864e5);
+  const pays = await fetchPayments(cfg.token, since);
+  await hsetChunks(MPPAY, pays.map((p) => [p.id, p]));
+  return { count: pays.length, lastUpdated: new Date().toISOString() };
+}
+
 export default async function handler(req, res) {
   if (setupError(res)) return;
   const cron = isCron(req);
@@ -67,7 +79,7 @@ export default async function handler(req, res) {
   const sec = await getSecrets();
   const st = await getStatus();
   const prev = st.sync || {};
-  const out = { shopify: null, meta: null };
+  const out = { shopify: null, meta: null, mp: null };
 
   if ((which === "all" || which === "shopify") && sec.shopify) {
     try {
@@ -87,8 +99,18 @@ export default async function handler(req, res) {
       await setStatus("meta", { ...(st.meta || {}), ok: false, error: e.message });
     }
   }
+  if ((which === "all" || which === "mp") && sec.mp) {
+    try {
+      out.mp = await syncMp(sec.mp, prev.mp, body);
+      await setStatus("mp", { ...(st.mp || {}), ok: true, error: null });
+    } catch (e) {
+      out.mp = { error: e.message };
+      await setStatus("mp", { ...(st.mp || {}), ok: false, error: e.message });
+    }
+  }
   const next = { ...prev };
   if (out.shopify && !out.shopify.error) next.shopify = { lastUpdated: out.shopify.lastUpdated, at: new Date().toISOString() };
+  if (out.mp && !out.mp.error) next.mp = { lastUpdated: out.mp.lastUpdated, at: new Date().toISOString() };
   if (out.meta && !out.meta.error) next.meta = { lastDay: out.meta.lastDay, at: new Date().toISOString() };
   await setStatus("sync", next);
   res.status(200).json(out);
