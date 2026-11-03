@@ -42,7 +42,7 @@ const tip = (t) => (t ? `<i class="tip" data-tip="${esc(t)}">i</i>` : "");
 const today = M.todayAR();
 const S = {
   view: localStorage.getItem("imp_view") || "dashboard",
-  sub: "todas",
+  sub: "resumen",
   cfgSub: "conexiones",
   preset: localStorage.getItem("imp_preset") || "30d",
   from: null, to: null,
@@ -179,7 +179,7 @@ function block(id, title, inner, right = "") { return `<section class="block" id
 
 // ============ vistas ============
 const VIEWS = [
-  ["dashboard", "Dashboard", "dash"], ["anuncios", "Anuncios", "ads"], ["caja", "Caja", "caja"],
+  ["dashboard", "Tu plata", "dash"], ["anuncios", "Anuncios", "ads"], ["caja", "Caja", "caja"],
   ["impuestos", "Impuestos", "imp"], ["socios", "Socios", "socios"], ["gastos", "Gastos", "gastos"],
   ["calculadora", "Calculadora", "calc"], ["config", "Configuración", "cfg"],
 ];
@@ -222,8 +222,51 @@ function banners() {
 
 const sinCostoCargado = (pid) => { const c = (S.prods[pid] || {}).costo; return c == null || c === ""; };
 
+// ---------- Resumen (lo importante, en criollo) ----------
+function plataBars(r) {
+  const items = [["Producto", r.producto, "#0E8C7F"], ["Cobro e impuestos", r.cobroImp, "#D0367A"], ["Envío y armado", r.envio + r.armado, "#C26A0A"], ["Anuncios", r.anuncios, "#0082fb"], ["Gastos fijos", r.fijos, "#7A8291"]].filter((x) => x[1] > 0);
+  const max = Math.max(r.ventas, 1);
+  return `<div class="flow"><div class="row"><span>Entró</span><div class="track"><div class="fill" style="width:100%;background:#34d399"></div></div><b>${money(r.ventas)}</b></div>
+    ${items.map(([l, v, c]) => `<div class="row"><span>${l}</span><div class="track"><div class="fill" style="width:${Math.min(100, (v / max) * 100)}%;background:${c}"></div></div><b>−${money(v)}</b></div>`).join("")}
+    <div class="row" style="border-top:1px solid var(--n690);padding-top:8px"><span><b>Te quedó</b></span><div></div><b class="${r.ganancia < 0 ? "down" : "up"}">${money(r.ganancia)}</b></div></div>`;
+}
+function chartHTML(serie) {
+  const labels = serie.map((d) => shortDate(d.d));
+  const k = S.cur === "USD" ? 1 / nn(cfg().dolar || 1) : 1;
+  const fmt = (v) => (S.cur === "USD" ? "US$" : "$") + (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1).replace(".", ",") + " M" : Math.abs(v) >= 1e3 ? Math.round(v / 1e3) + " mil" : Math.round(v));
+  return `<div class="card chart">${lineChart([{ name: "Vendiste", color: "#dc327d", vals: serie.map((d) => d.ventas * k) }, { name: "Te quedó", color: "#34d399", vals: serie.map((d) => d.ganancia * k) }, { name: "Anuncios", color: "#0082fb", vals: serie.map((d) => d.anuncios * k), bars: true }], labels, fmt)}</div>`;
+}
+function resumenHTML(r, p, serie) {
+  const sv = (k) => serie.map((d) => d[k]);
+  if (!r.pedidos && !r.anuncios) return '<div class="card empty"><b>Todavía no hay ventas ni anuncios en estas fechas.</b><br>Si recién conectaste, tocá ↻ Actualizar arriba.</div>';
+  const gana = r.ganancia >= 0;
+  const de100 = Math.round(Math.abs(r.margen) * 100);
+  const titulo = !r.ventas ? "Todavía no cobraste ventas en estas fechas." : gana ? `Ganaste plata: de cada $100 que vendiste te quedaron $${de100}.` : `Perdiste plata: de cada $100 que vendiste perdiste $${de100}.`;
+  const vsAntes = p.ventas ? (r.ganancia >= p.ganancia ? `Mejoró contra los ${r.dias} días anteriores (${money(p.ganancia)}).` : `Empeoró contra los ${r.dias} días anteriores (${money(p.ganancia)}).`) : "";
+  const tiles = [
+    { label: "Vendiste", value: money(r.ventas), sub: `${int(r.pagados)} pedidos pagados · ${delta(r.ventas, p.ventas)}`, series: sv("ventas"), src: "shopify" },
+    { label: "Te quedó", value: money(r.ganancia), sub: delta(r.ganancia, p.ganancia) || (r.ventas ? `${pct(r.margen)} de lo que vendiste` : ""), series: sv("ganancia"), tone: gana ? "good" : "bad", color: gana ? "#34d399" : "#ef4444", src: "mix" },
+    { label: "En anuncios", value: money(r.anuncios), sub: r.monedaAds === "USD" && S.cur !== "USD" ? usd(r.spendCuenta) + " en Meta" : delta(r.anuncios, p.anuncios, true), series: sv("anuncios"), color: "#0082fb", src: "meta" },
+    { label: "Cada venta te costó", value: r.pagados && r.anuncios ? usd1(r.cpaUsd) : "–", sub: r.cpaMaxUsd ? `podés pagar hasta ${usd1(r.cpaMaxUsd)}` : "", tone: r.cpaUsd && r.cpaMaxUsd ? (r.cpaUsd <= r.cpaMaxUsd ? "good" : "bad") : "", src: "mix" },
+  ];
+  const ok = (b) => `<span class="dot ${b ? "ok" : "bad"}"></span>`;
+  const frases = [];
+  if (r.anuncios && r.ventas) frases.push(`${ok(r.roas >= r.beRoas)}Por cada <b>$1</b> que pusiste en anuncios volvieron <b>$${x2(r.roas)}</b>. Para no perder alcanzaba con <b>$${x2(r.beRoas)}</b>: ${r.roas >= r.beRoas ? "estás arriba del equilibrio." : "estás debajo del equilibrio, perdés plata con los anuncios."}`);
+  if (r.anuncios && r.pagados) frases.push(`${ok(r.cpaUsd <= r.cpaMaxUsd)}Cada venta te costó <b>${usd1(r.cpaUsd)}</b> en anuncios y podés pagar hasta <b>${usd1(r.cpaMaxUsd)}</b> sin perder.`);
+  if (r.pagados) frases.push(`<span class="dot"></span>Cada pedido te deja <b>${money(r.aov)}</b> en promedio y se llevan <b>${x2(r.unidadesPorPedido).replace(",00", "")}</b> unidades.`);
+  if (r.pendientes.n + r.vencidos.n) frases.push(`${ok(false)}Quedaron <b>${money(r.pendientes.monto + r.vencidos.monto)}</b> sin cobrar en ${int(r.pendientes.n + r.vencidos.n)} pedidos (pendientes o vencidos).`);
+  const top = M.ofertas(ctx(), S.from, S.to).filter((o) => o.pedidos >= 3).sort((a, b) => b.antes - a.antes)[0];
+  if (top) frases.push(`<span class="dot ok"></span>La oferta que más plata te deja por venta es la de <b>${top.oferta}${top.oferta === 3 ? " o más" : ""} ${top.oferta === 1 ? "unidad" : "unidades"}</b>: ${money(top.antes)} antes del anuncio.`);
+  return `<div class="hero"><span class="muted">${shortDate(S.from)} – ${shortDate(S.to)}</span><span class="big ${gana ? "" : "down"}" style="font-size:30px">${titulo}</span><p class="muted small">${vsAntes}</p></div>
+    <div class="grid">${tiles.map(card).join("")}</div>
+    <div class="cols"><div class="card"><h3>Cómo vas</h3><div style="display:grid;gap:10px;font-size:14px">${frases.map((f) => `<div>${f}</div>`).join("")}</div></div>
+    <div class="card"><h3>A dónde fue la plata</h3>${plataBars(r)}</div></div>
+    ${block("grafico-r", "Día por día", chartHTML(serie))}
+    <div class="actions"><button class="ctl" data-sub="todas">Ver todo el detalle →</button><button class="ctl" data-nav="anuncios">Ver cómo vienen tus anuncios →</button></div>`;
+}
+
 // ---------- Dashboard ----------
-const SUBS = [["todas", "Todas"], ["principales", "Métricas principales"], ["plata", "A dónde fue la plata"], ["tienda", "Tienda"], ["meta", "Meta"], ["costos", "Costos"], ["productos", "Productos"], ["ofertas", "Ofertas"], ["embudo", "Embudo"], ["mes", "Tu mes"], ["ventas", "Últimas ventas"], ["grafico", "Gráfico"]];
+const SUBS = [["resumen", "Resumen"], ["todas", "Todo el detalle"], ["plata", "A dónde fue la plata"], ["tienda", "Pedidos"], ["meta", "Anuncios de Meta"], ["costos", "Costos"], ["productos", "Productos"], ["ofertas", "Ofertas"], ["embudo", "Dónde se pierde la gente"], ["mes", "Tu mes"], ["ventas", "Últimas ventas"], ["grafico", "Día por día"]];
 function viewDashboard() {
   const c = ctx();
   const r = M.resumen(c, S.from, S.to);
@@ -235,30 +278,31 @@ function viewDashboard() {
   const show = (k) => S.sub === "todas" || S.sub === k;
   let h = `<div class="bar2"><div class="chips">${SUBS.map(([k, l]) => `<button class="chip" data-sub="${k}" aria-pressed="${S.sub === k}">${l}</button>`).join("")}</div>${rangeBar()}</div><div class="content">${banners()}`;
   if (!S.loaded) return h + '<div class="empty">Cargando datos…</div></div>';
+  if (S.sub === "resumen") return h + resumenHTML(r, p, serie) + "</div>";
 
   if (show("principales")) {
     const cards = [
-      { label: "Facturación", tip: "Lo que entró de verdad de los pedidos pagados, sin devoluciones.", value: money(r.ventas), sub: delta(r.ventas, p.ventas), series: sv("ventas"), src: "shopify" },
-      { label: "Ganancia", tip: "Facturación menos producto, cobro e impuestos, envío y armado, anuncios y gastos fijos.", value: money(r.ganancia), sub: delta(r.ganancia, p.ganancia), series: sv("ganancia"), tone: r.ganancia < 0 ? "bad" : "", src: "mix" },
-      { label: "Margen de ganancia", tip: "Ganancia / Facturación. De cada $100 que vendés, cuánto te queda.", value: pct(r.margen), sub: delta(r.margen, p.margen), src: "mix" },
-      { label: "Órdenes pagadas", tip: `Pedidos pagados. Se hicieron ${int(r.pedidos)} en total (incluye pendientes, vencidos y cancelados).`, value: int(r.pagados), sub: delta(r.pagados, p.pagados), series: sv("pedidos"), src: "shopify" },
-      { label: "Inversión publicitaria", tip: `Gasto en Meta${nn(conf.recargoAds) ? " con el " + conf.recargoAds + " % de recargo" : ""}, pasado a pesos con tu dólar.`, value: money(r.anuncios), sub: r.monedaAds === "USD" ? usd(r.spendCuenta) + " en la cuenta" : delta(r.anuncios, p.anuncios, true), series: sv("anuncios"), color: "#0082fb", src: "meta" },
-      { label: "ROAS", tip: "Facturación / gasto en anuncios. Por cada $1 en anuncios, cuánto vendiste.", value: x2(r.roas), sub: r.beRoas ? `necesitás ${x2(r.beRoas)} para no perder` : "", tone: r.roas && r.beRoas ? (r.roas >= r.beRoas ? "good" : "bad") : "", src: "mix" },
-      { label: "Break Even ROAS", tip: "El ROAS mínimo para no perder plata: Facturación / lo que queda antes de pagar anuncios.", value: x2(r.beRoas), sub: delta(r.beRoas, p.beRoas, true), src: "mix" },
-      { label: "True ROAS", tip: "Facturación neta (sin producto, envío, armado y comisiones) / inversión publicitaria.", value: x2(r.trueRoas), sub: delta(r.trueRoas, p.trueRoas), src: "mix" },
-      { label: "CPA", tip: "Lo que te costó en anuncios cada venta pagada.", value: usd1(r.cpaUsd), sub: r.cpaMaxUsd ? `podés pagar hasta ${usd1(r.cpaMaxUsd)} sin perder` : "", tone: r.cpaUsd && r.cpaMaxUsd ? (r.cpaUsd <= r.cpaMaxUsd ? "good" : "bad") : "", src: "mix" },
-      { label: "AOV", tip: "Ticket promedio: facturación / pedidos pagados.", value: money(r.aov), sub: `${x2(r.unidadesPorPedido)} unidades por pedido`, src: "shopify" },
-      { label: "Facturación neta", tip: "Facturación menos envío, producto y comisiones de cobro.", value: money(r.netas), sub: delta(r.netas, p.netas), src: "mix" },
-      { label: "MER", tip: "Anuncios / facturación: qué parte de lo que vendés se va en publicidad.", value: pct(r.mer), sub: delta(r.mer, p.mer, true), src: "mix" },
+      { label: "Vendiste", tip: "Facturación: lo que entró de verdad de los pedidos pagados, sin devoluciones.", value: money(r.ventas), sub: delta(r.ventas, p.ventas), series: sv("ventas"), src: "shopify" },
+      { label: "Te quedó", tip: "Ganancia: lo que vendiste menos producto, cobro e impuestos, envío y armado, anuncios y gastos fijos.", value: money(r.ganancia), sub: delta(r.ganancia, p.ganancia), series: sv("ganancia"), tone: r.ganancia < 0 ? "bad" : "", src: "mix" },
+      { label: "Margen", tip: "Ganancia ÷ ventas. De cada $100 que vendés, cuánto te queda.", value: pct(r.margen), sub: delta(r.margen, p.margen), src: "mix" },
+      { label: "Pedidos pagados", tip: `Pedidos pagados. Se hicieron ${int(r.pedidos)} en total (incluye pendientes, vencidos y cancelados).`, value: int(r.pagados), sub: delta(r.pagados, p.pagados), series: sv("pedidos"), src: "shopify" },
+      { label: "En anuncios", tip: `Inversión publicitaria: gasto en Meta${nn(conf.recargoAds) ? " con el " + conf.recargoAds + " % de recargo" : ""}, pasado a pesos con tu dólar.`, value: money(r.anuncios), sub: r.monedaAds === "USD" ? usd(r.spendCuenta) + " en la cuenta" : delta(r.anuncios, p.anuncios, true), series: sv("anuncios"), color: "#0082fb", src: "meta" },
+      { label: "Por cada $1 en anuncios", tip: "ROAS: ventas ÷ gasto en anuncios. Cuánto vendiste por cada $1 que pusiste en Meta.", value: "$" + x2(r.roas), sub: r.beRoas ? `para no perder necesitás más de $${x2(r.beRoas)}` : "", tone: r.roas && r.beRoas ? (r.roas >= r.beRoas ? "good" : "bad") : "", src: "mix" },
+      { label: "Para no perder necesitás", tip: "ROAS de equilibrio (break even): ventas ÷ lo que te queda antes de pagar anuncios. Por debajo, perdés plata.", value: "$" + x2(r.beRoas), sub: delta(r.beRoas, p.beRoas, true), src: "mix" },
+      { label: "Por cada $1, sin costos", tip: "True ROAS: lo vendido ya sin producto, envío, armado y comisiones, dividido lo que pusiste en anuncios.", value: "$" + x2(r.trueRoas), sub: delta(r.trueRoas, p.trueRoas), src: "mix" },
+      { label: "Cada venta te costó", tip: "CPA: lo que gastaste en anuncios por cada venta pagada.", value: usd1(r.cpaUsd), sub: r.cpaMaxUsd ? `podés pagar hasta ${usd1(r.cpaMaxUsd)} sin perder` : "", tone: r.cpaUsd && r.cpaMaxUsd ? (r.cpaUsd <= r.cpaMaxUsd ? "good" : "bad") : "", src: "mix" },
+      { label: "Cada pedido, en promedio", tip: "Ticket promedio (AOV): ventas ÷ pedidos pagados.", value: money(r.aov), sub: `${x2(r.unidadesPorPedido)} unidades por pedido`, src: "shopify" },
+      { label: "Vendiste, sin costos de venta", tip: "Facturación neta: ventas menos producto, envío, armado y comisiones de cobro.", value: money(r.netas), sub: delta(r.netas, p.netas), src: "mix" },
+      { label: "Parte de lo vendido que va a anuncios", tip: "MER: anuncios ÷ ventas.", value: pct(r.mer), sub: delta(r.mer, p.mer, true), src: "mix" },
     ];
-    h += block("principales", "Métricas principales", `<div class="grid">${cards.map(card).join("")}</div>`, `<span class="muted">${shortDate(S.from)} – ${shortDate(S.to)}</span>`);
+    h += block("principales", "Números clave", `<div class="grid">${cards.map(card).join("")}</div>`, `<span class="muted">${shortDate(S.from)} – ${shortDate(S.to)}</span>`);
   }
   if (show("plata")) {
     const items = [["Producto", r.producto, "#0E8C7F"], ["Cobro e impuestos", r.cobroImp, "#D0367A"], ["Envío y armado", r.envio + r.armado, "#C26A0A"], ["Anuncios", r.anuncios, "#0082fb"], ["Gastos fijos", r.fijos, "#7A8291"]];
     const salio = items.reduce((a, x) => a + x[1], 0);
     const max = Math.max(r.ventas, 1);
     h += block("plata", "A dónde fue la plata", `<div class="cols"><div class="hero"><span class="muted">Te quedó</span><span class="big ${r.ganancia < 0 ? "down" : ""}">${money(r.ganancia)}</span>
-      <p>${r.anuncios ? `Por cada $1 en anuncios volvieron <b>$${x2(r.roas)}</b> y para no perder alcanzaba con <b>${x2(r.beRoas)}</b>: ${r.roas >= r.beRoas ? "estás arriba del equilibrio." : "estás debajo del equilibrio."}` : "Todavía no hay gasto en anuncios en estas fechas."}</p>
+      <p>${r.anuncios ? `Por cada $1 en anuncios volvieron <b>$${x2(r.roas)}</b> y para no perder alcanzaba con <b>$${x2(r.beRoas)}</b>: ${r.roas >= r.beRoas ? "estás arriba del equilibrio." : "estás debajo del equilibrio."}` : "Todavía no hay gasto en anuncios en estas fechas."}</p>
       ${r.pagados && r.anuncios ? `<p>Cada venta te costó <b>${usd1(r.cpaUsd)}</b> en anuncios y podés pagar hasta <b>${usd1(r.cpaMaxUsd)}</b> sin perder.</p>` : ""}
       <p class="muted small">${p.ventas ? (r.ganancia >= p.ganancia ? "Mejoró" : "Empeoró") + " contra el período anterior (" + money(p.ganancia) + ")." : ""}</p></div>
       <div class="card"><div class="flow"><div class="row"><span>Entró</span><div class="track"><div class="fill" style="width:100%;background:#34d399"></div></div><b>${money(r.ventas)}</b></div>
@@ -269,41 +313,41 @@ function viewDashboard() {
   }
   if (show("tienda")) {
     const cards = [
-      { label: "Órdenes totales", tip: "Todos los pedidos que se hicieron, pagados o no.", value: int(r.pedidos), sub: delta(r.pedidos, p.pedidos), src: "shopify" },
-      { label: "Pagados", value: int(r.pagados), sub: money(r.ventas), src: "shopify" },
-      { label: "Pendientes de pago", tip: "Pedidos que todavía no se cobraron.", value: int(r.pendientes.n), sub: money(r.pendientes.monto), src: "shopify" },
+      { label: "Pedidos que se hicieron", tip: "Todos los pedidos, pagados o no.", value: int(r.pedidos), sub: delta(r.pedidos, p.pedidos), src: "shopify" },
+      { label: "Se pagaron", value: int(r.pagados), sub: money(r.ventas), src: "shopify" },
+      { label: "Todavía sin cobrar", tip: "Pedidos pendientes de pago.", value: int(r.pendientes.n), sub: money(r.pendientes.monto), src: "shopify" },
       { label: "Venció el pago", value: int(r.vencidos.n), sub: money(r.vencidos.monto), src: "shopify" },
       { label: "Cancelados", value: int(r.cancelados.n), sub: money(r.cancelados.monto), src: "shopify" },
-      { label: "Devoluciones", value: int(r.devueltos.n), sub: money(r.devueltos.monto), src: "shopify" },
-      { label: "Descuentos", tip: "Plata que se descontó en los pedidos pagados.", value: money(r.descuentos), sub: r.pagados ? `${pct(r.conDescuento / r.pagados, 0)} de los pedidos` : "", src: "shopify" },
-      { label: "Por transferencia", tip: "Pedidos pagados con un medio manual (no pagan comisión de Mercado Pago).", value: int(r.transferencias), sub: r.pagados ? pct(r.transferencias / r.pagados, 0) : "", src: "shopify" },
+      { label: "Devueltos", value: int(r.devueltos.n), sub: money(r.devueltos.monto), src: "shopify" },
+      { label: "Descontaste", tip: "Plata que se descontó en los pedidos pagados.", value: money(r.descuentos), sub: r.pagados ? `${pct(r.conDescuento / r.pagados, 0)} de los pedidos` : "", src: "shopify" },
+      { label: "Pagaron por transferencia", tip: "Pedidos pagados con un medio manual (no pagan comisión de Mercado Pago).", value: int(r.transferencias), sub: r.pagados ? pct(r.transferencias / r.pagados, 0) : "", src: "shopify" },
     ];
     const codes = Object.entries(r.codigos).sort((a, b) => b[1] - a[1]);
-    h += block("tienda", "Tienda", `<div class="grid">${cards.map(card).join("")}</div>${codes.length ? `<p class="note" style="margin-top:8px">Códigos usados: ${codes.slice(0, 8).map(([k, v]) => `<span class="tag">${esc(k)} · ${v}</span>`).join(" ")}</p>` : ""}`);
+    h += block("tienda", "Pedidos", `<div class="grid">${cards.map(card).join("")}</div>${codes.length ? `<p class="note" style="margin-top:8px">Códigos usados: ${codes.slice(0, 8).map(([k, v]) => `<span class="tag">${esc(k)} · ${v}</span>`).join(" ")}</p>` : ""}`);
   }
   if (show("meta")) {
     const m = r.meta;
     const cards = [
-      { label: "Inversión publicitaria", value: r.monedaAds === "USD" ? usd(r.spendCuenta) : ars(r.spendCuenta), sub: money(r.anuncios) + " en pesos", src: "meta", series: sv("anuncios"), color: "#0082fb" },
-      { label: "Facturación (Meta)", tip: "Lo que Meta dice que vendieron tus anuncios (píxel). Puede no coincidir con Shopify.", value: money(m.pv), sub: `${int(m.pu)} compras según Meta`, src: "meta" },
-      { label: "ROAS (Meta)", tip: "Facturación según el píxel / gasto.", value: x2(m.roasPixel), src: "meta" },
-      { label: "CPA (Meta)", tip: "Gasto / compras según el píxel.", value: r.monedaAds === "USD" ? usd(m.cpaPixel) : ars(m.cpaPixel), src: "meta" },
-      { label: "CPM", tip: "Lo que cuestan 1.000 impresiones.", value: r.monedaAds === "USD" ? usd(m.cpm) : ars(m.cpm), src: "meta" },
-      { label: "CTR", tip: "Clics en el enlace / impresiones.", value: pct(m.ctr, 2), src: "meta" },
-      { label: "Impresiones", value: int(m.imp), src: "meta" },
+      { label: "Gastaste en Meta", value: r.monedaAds === "USD" ? usd(r.spendCuenta) : ars(r.spendCuenta), sub: money(r.anuncios) + " en pesos", src: "meta", series: sv("anuncios"), color: "#0082fb" },
+      { label: "Meta dice que vendiste", tip: "Lo que el píxel atribuye a tus anuncios. Puede no coincidir con Shopify.", value: money(m.pv), sub: `${int(m.pu)} compras según Meta`, src: "meta" },
+      { label: "Por cada $1, según Meta", tip: "ROAS del píxel: lo que Meta dice que vendiste ÷ gasto.", value: "$" + x2(m.roasPixel), src: "meta" },
+      { label: "Cada compra, según Meta", tip: "CPA del píxel: gasto ÷ compras que reporta Meta.", value: r.monedaAds === "USD" ? usd(m.cpaPixel) : ars(m.cpaPixel), src: "meta" },
+      { label: "Que te vean 1.000 veces cuesta", tip: "CPM: costo de 1.000 impresiones.", value: r.monedaAds === "USD" ? usd(m.cpm) : ars(m.cpm), src: "meta" },
+      { label: "Tocan el anuncio", tip: "CTR: clics en el enlace ÷ impresiones. De cada 100 que lo ven, cuántos tocan.", value: pct(m.ctr, 2), src: "meta" },
+      { label: "Veces que se vio", tip: "Impresiones.", value: int(m.imp), src: "meta" },
       { label: "Agregaron al carrito", value: int(m.atc), sub: m.atc ? (r.monedaAds === "USD" ? usd(r.spendCuenta / m.atc) : ars(r.spendCuenta / m.atc)) + " cada uno" : "", src: "meta" },
     ];
-    h += block("meta", "Meta", S.data.ads.length ? `<div class="grid">${cards.map(card).join("")}</div>` : '<div class="card empty">Conectá Meta en Configuración para ver el gasto y el ROAS.</div>');
+    h += block("meta", "Anuncios de Meta", S.data.ads.length ? `<div class="grid">${cards.map(card).join("")}</div>` : '<div class="card empty">Conectá Meta en Configuración para ver el gasto y el ROAS.</div>');
   }
   if (show("costos")) {
     const cards = [
-      { label: "Costo de productos", tip: "Unidades vendidas × el costo que cargaste de cada producto.", value: money(r.producto), sub: r.ventas ? pct(r.producto / r.ventas) + " de la facturación" : "", src: "mix" },
+      { label: "Producto", tip: "Unidades vendidas × el costo que cargaste de cada producto.", value: money(r.producto), sub: r.ventas ? pct(r.producto / r.ventas) + " de la facturación" : "", src: "mix" },
       { label: "Envío y armado", value: money(r.envio + r.armado), sub: r.pagados ? money((r.envio + r.armado) / r.pagados) + " por pedido" : "", src: "mix" },
-      { label: "Comisiones de pago", tip: "Mercado Pago (con o sin cuotas según la oferta).", value: money(r.mp), sub: r.ventas ? pct(r.mp / r.ventas) : "", src: "mix" },
-      { label: "Comisión de plataforma", tip: "Lo que se queda Shopify por venta.", value: money(r.shopify), src: "mix" },
+      { label: "Mercado Pago", tip: "Comisión de cobro, con o sin cuotas según la oferta.", value: money(r.mp), sub: r.ventas ? pct(r.mp / r.ventas) : "", src: "mix" },
+      { label: "Shopify", tip: "Lo que se queda Shopify por venta.", value: money(r.shopify), src: "mix" },
       { label: "Ingresos brutos", value: money(r.iibb), src: "mix" },
       { label: "IVA a pagar", tip: "IVA de venta (con el beneficio) menos el IVA de comisiones, envío y lo que te facturan.", value: money(r.ivaPagar), src: "mix" },
-      { label: "Inversión publicitaria", value: money(r.anuncios), src: "meta" },
+      { label: "Anuncios", value: money(r.anuncios), src: "meta" },
       { label: "Gastos fijos", tip: `Lo que pagás todos los meses (${money(r.fijosMensual)} por mes), repartido día a día.`, value: money(r.fijos), src: "mix" },
     ];
     h += block("costos", "Costos", `<div class="grid">${cards.map(card).join("")}</div>`);
@@ -342,12 +386,7 @@ function viewDashboard() {
       ${ult.map((o) => { const st = M.estado(o); const k = M.costoPedido(o, cfg(), S.prods); const margen = st === "pagado" ? k.margen : 0; return `<tr><td>${esc(o.n)}</td><td><span class="tag ${E[st][0]}">${E[st][1]}</span></td><td>${new Date(o.c).toLocaleString("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td><td>${esc(o.li.filter((l) => l.cq > 0).map((l) => l.cq + "× " + l.ti).join(", ").slice(0, 60))}</td><td class="muted">${M.esTransferencia(o) ? "Transferencia" : "Mercado Pago"}</td><td class="r">${money(o.tot)}</td><td class="r">${st === "pagado" ? money(margen) : "–"}</td><td class="r">${st === "pagado" && k.venta ? pct(margen / k.venta, 0) : "–"}</td></tr>`; }).join("")}</tbody></table></div>
       <div class="actions" style="margin-top:8px"><button class="ctl" data-act="csv-orders">Exportar Excel (CSV)</button><span class="note">"Te quedó" es antes de anuncios y gastos fijos.</span></div>` : '<div class="card empty">Sin pedidos en estas fechas.</div>');
   }
-  if (show("grafico")) {
-    const labels = serie.map((d) => shortDate(d.d));
-    const k = S.cur === "USD" ? 1 / nn(cfg().dolar || 1) : 1;
-    const fmt = (v) => (S.cur === "USD" ? "US$" : "$") + (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1).replace(".", ",") + " M" : Math.abs(v) >= 1e3 ? Math.round(v / 1e3) + " mil" : Math.round(v));
-    h += block("grafico", "Día por día", `<div class="card chart">${lineChart([{ name: "Ventas", color: "#dc327d", vals: serie.map((d) => d.ventas * k) }, { name: "Ganancia", color: "#34d399", vals: serie.map((d) => d.ganancia * k) }, { name: "Anuncios", color: "#0082fb", vals: serie.map((d) => d.anuncios * k), bars: true }], labels, fmt)}</div>`);
-  }
+  if (show("grafico")) h += block("grafico", "Día por día", chartHTML(serie));
   return h + "</div>";
 }
 
@@ -510,38 +549,49 @@ function viewConfig() {
   if (S.cfgSub === "conexiones") {
     const cn = S.conn || { shopify: {}, meta: {} };
     const sh = cn.shopify || {}, me = cn.meta || {};
-    const lastS = cn.sync && cn.sync.shopify ? new Date(cn.sync.shopify.at).toLocaleString("es-AR") : null;
-    const lastM = cn.sync && cn.sync.meta ? new Date(cn.sync.meta.at).toLocaleString("es-AR") : null;
-    h += `<div class="cols"><div class="card" style="display:grid;gap:10px"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Tu tienda de Shopify</h3><span class="tag ${sh.connected ? (sh.error ? "bad" : "good") : ""}">${sh.connected ? (sh.error ? "Con error" : "Conectada") : "Sin conectar"}</span></div>
-      ${sh.connected ? `<p class="note">${esc(sh.name || sh.shop)} · ${esc(sh.shop)}${lastS ? " · actualizada " + esc(lastS) : ""}</p>${sh.error ? `<p class="banner bad">${esc(sh.error)}</p>` : ""}` : ""}
-      <p class="note">Vemos las ventas de los últimos 60 días (para ir más atrás, sumale <code>read_all_orders</code> a tu app). Solo leemos: no cambiamos nada y no vemos nombres, mails ni direcciones de tus clientes.</p>
-      <details ${sh.connected ? "" : "open"}><summary style="cursor:pointer;font-weight:600">${sh.connected ? "Cambiar los códigos de tu app" : "Cómo conectarla (5 pasos)"}</summary>
-      <ol class="small" style="display:grid;gap:8px;padding-left:18px;color:var(--n200)">
-        <li><b>Entrá a tu Dev Dashboard:</b> <a href="https://dev.shopify.com" target="_blank" rel="noopener">dev.shopify.com</a>, con la cuenta dueña de la tienda, y andá a <b>Apps</b>.</li>
-        <li><b>Creá la app:</b> Crear app → <b>Crear app de forma manual</b>. Nombre: <code>Impoluto Números</code>. En URL de la app pegá <code>https://shopify.dev/apps/default-app-home</code> y destildá <i>Incrustar app en el panel de control de Shopify</i>.</li>
-        <li><b>Elegí los permisos:</b> en Alcances pegá <code>read_orders,read_products,read_inventory,read_reports</code> y tocá Crear app (si pregunta por la versión, Lanzar). Si Shopify no te deja <code>read_reports</code>, sacalo: solo perdés el embudo de la tienda. Nada que empiece con <code>write_</code>.</li>
-        <li><b>Instalala en tu tienda:</b> en el cuadro Instalaciones → Instalar app → Instalar. Si después ves una página con error, cerrala: ya quedó instalada.</li>
-        <li><b>Pegá los códigos acá:</b> en Configuración de la app copiá el <b>ID de cliente</b> y el <b>Secreto del cliente</b> con sus botones de copiar.</li>
-      </ol>
-      <div class="form" style="margin-top:8px"><label class="f"><span>El nombre de tu tienda</span><input class="in" id="sh-shop" placeholder="impolutocar.myshopify.com" value="${esc(sh.shop || "")}"><small>El que termina en .myshopify.com (Configuración → Dominios).</small></label>
-      <label class="f"><span>ID de cliente (Client ID)</span><input class="in" id="sh-id" autocomplete="off"></label><label class="f"><span>Secreto del cliente (Client secret)</span><input class="in" id="sh-secret" type="password" autocomplete="off"><small>Lo guardamos bajo llave y nunca lo mostramos.</small></label></div>
-      <div class="actions" style="margin-top:8px"><button class="ctl pri" data-act="sh-save">${sh.connected ? "Guardar los códigos nuevos" : "Conectar mi tienda"}</button>${sh.connected ? '<button class="ctl" data-act="sh-del">Desconectar</button>' : ""}</div></details></div>
+    const when = (x) => (x ? new Date(x.at).toLocaleString("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : null);
+    const lastS = when(cn.sync && cn.sync.shopify), lastM = when(cn.sync && cn.sync.meta);
+    const copy = (v) => `<span class="copyrow"><code>${esc(v)}</code><button class="ctl" data-copy="${esc(v)}">Copiar</button></span>`;
+    const step = (n, title, body, done) => `<div class="step ${done ? "done" : ""}"><span class="num">${done ? "✓" : n}</span><div><b>${title}</b><div class="small" style="color:var(--n200);margin-top:4px;display:grid;gap:6px">${body}</div></div></div>`;
+    const estado = (x, okTxt) => `<span class="tag ${x.connected ? (x.error ? "bad" : "good") : ""}">${x.connected ? (x.error ? "Con error" : okTxt) : "Sin conectar"}</span>`;
+    const ext = (url, txt) => `<a class="ctl" href="${url}" target="_blank" rel="noopener" style="text-decoration:none;justify-self:start">${txt} ↗</a>`;
 
-      <div class="card" style="display:grid;gap:10px"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Tus anuncios de Meta</h3><span class="tag ${me.connected ? (me.error ? "bad" : "good") : ""}">${me.connected ? (me.error ? "Con error" : "Conectado") : "Sin conectar"}</span></div>
-      ${me.connected ? `<p class="note">${esc((me.names || me.accounts || []).join(", "))} · moneda ${esc(me.currency || "?")}${lastM ? " · actualizado " + esc(lastM) : ""}</p>${me.error ? `<p class="banner bad">${esc(me.error)}</p>` : ""}` : ""}
-      <p class="note">Con tus anuncios leemos cuánto gastás y cuánto vende cada anuncio, conjunto y campaña. Solo leemos: no cambiamos ni apagamos nada.</p>
-      <details ${me.connected ? "" : "open"}><summary style="cursor:pointer;font-weight:600">${me.connected ? "Cambiar el acceso" : "Cómo conectarlo"}</summary>
-      <ol class="small" style="display:grid;gap:8px;padding-left:18px;color:var(--n200)">
-        <li>Entrá a <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">developers.facebook.com/apps</a> → Crear app → tipo <b>Empresa</b> (Business), conectada a tu portfolio comercial.</li>
-        <li>En <a href="https://business.facebook.com/settings/system-users" target="_blank" rel="noopener">Configuración del negocio → Usuarios del sistema</a> creá uno (rol Empleado), tocá <b>Asignar activos</b> y dale tu cuenta publicitaria con permiso de ver rendimiento.</li>
-        <li>En ese usuario tocá <b>Generar token</b>, elegí la app del paso 1, vencimiento <b>Nunca</b> y el permiso <code>ads_read</code>. Copiá el token.</li>
-        <li>El ID de la cuenta publicitaria son los números que ves en el Administrador de anuncios (act_…). Si tenés varias, separalas con coma.</li>
-      </ol>
-      <div class="form" style="margin-top:8px"><label class="f"><span>Token de acceso</span><input class="in" id="me-token" type="password" autocomplete="off"></label><label class="f"><span>ID de la cuenta publicitaria</span><input class="in" id="me-acc" placeholder="1234567890" value="${esc((me.accounts || []).map((a) => a.replace("act_", "")).join(", "))}"></label>
-      <label class="f"><span>¿El token vence?</span><input class="in" type="date" id="me-vence" value="${esc(S.costos.metaVence || "")}"><small>Dejalo vacío si elegiste "Nunca". Si vence, te avisamos 10 días antes.</small></label></div>
-      <div class="actions" style="margin-top:8px"><button class="ctl pri" data-act="me-save">${me.connected ? "Guardar el acceso nuevo" : "Conectar Meta"}</button>${me.connected ? '<button class="ctl" data-act="me-del">Desconectar</button>' : ""}</div></details></div></div>
-      <div class="card"><h3>Actualización</h3><p class="note">Los datos se actualizan solos todos los días a las 6 de la mañana${cn.cron ? "" : " (falta la variable CRON_SECRET en Vercel: mirá el LEEME)"} y cada vez que abrís la app si pasó más de una hora. También podés forzarlo:</p>
-      <div class="actions" style="margin-top:8px"><button class="ctl" data-act="sync" ${S.syncing ? "disabled" : ""}>${S.syncing ? "Sincronizando…" : "↻ Actualizar ahora"}</button><button class="ctl" data-act="sync-full" ${S.syncing ? "disabled" : ""}>Volver a traer los últimos 60 días</button></div></div>`;
+    h += `<p class="banner info">Las dos conexiones son <b>solo de lectura</b>: no instalan nada en tu tienda, no tocan tu píxel ni tus campañas. Solo leen ventas y gastos.</p>`;
+    // ----- Shopify -----
+    h += `<div class="card" style="display:grid;gap:14px"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">1 · Tu tienda de Shopify</h3>${estado(sh, "Conectada")}</div>`;
+    if (sh.connected && !S.editSh) {
+      h += `<p style="margin:0">${sh.error ? `<span class="down">${esc(sh.error)}</span>` : `Leyendo <b>${esc(sh.name || sh.shop)}</b>${lastS ? ` · última actualización ${esc(lastS)}` : ""}.`}</p>
+        <div class="actions"><button class="ctl" data-act="sync" ${S.syncing ? "disabled" : ""}>${S.syncing ? "Actualizando…" : "↻ Actualizar ahora"}</button><button class="ctl" data-act="edit-sh">Cambiar los códigos</button><button class="ctl" data-act="sh-del">Desconectar</button></div>`;
+    } else {
+      h += `<div class="steps">
+        ${step(1, "Creá la app en Shopify <span class='muted'>(si ya la tenés, salteá)</span>", `${ext("https://dev.shopify.com/dashboard", "Abrir Shopify Dev Dashboard")}<div>Apps → <b>Crear app</b> → <b>Crear app de forma manual</b>, y completá:</div>
+          <div>Nombre: ${copy("Impoluto Numeros")}</div><div>URL de la app: ${copy("https://shopify.dev/apps/default-app-home")} <span class="muted">y destildá "Incrustar app"</span></div><div>Alcances (permisos): ${copy("read_orders,read_products,read_inventory,read_reports")}</div><div>Tocá <b>Crear app</b> y después <b>Lanzar</b>.</div>`)}
+        ${step(2, "Instalala en tu tienda", `<div>En Apps, al lado de tu app tocá los <b>tres puntitos → Instalar app</b>, elegí Impoluto y tocá <b>Install</b>.</div>`)}
+        ${step(3, "Pegá los códigos acá", `<div>Están en tu app → <b>Overview → Credentials</b>. Copialos con sus botones.</div>
+          <div class="form" style="margin-top:4px"><label class="f"><span>Nombre de la tienda</span><input class="in" id="sh-shop" placeholder="6a01uk-kf.myshopify.com" value="${esc(sh.shop || "6a01uk-kf.myshopify.com")}"><small>Termina en .myshopify.com</small></label>
+          <label class="f"><span>Client ID</span><input class="in" id="sh-id" autocomplete="off" placeholder="32 letras y números"></label>
+          <label class="f"><span>Client secret</span><input class="in" id="sh-secret" type="password" autocomplete="off" placeholder="el que está con puntitos"><small>Lo guardamos bajo llave y nunca se muestra.</small></label></div>
+          <div class="actions"><button class="ctl pri" data-act="sh-save">Conectar mi tienda</button>${sh.connected ? '<button class="ctl" data-act="edit-sh">Cancelar</button>' : ""}</div>`)}
+      </div><p class="note">Trae los pedidos de los últimos 60 días. No ve nombres, mails ni direcciones de tus clientes.</p>`;
+    }
+    h += `</div>`;
+    // ----- Meta -----
+    h += `<div class="card" style="display:grid;gap:14px"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">2 · Tus anuncios de Meta</h3>${estado(me, "Conectado")}</div>`;
+    if (me.connected && !S.editMe) {
+      h += `<p style="margin:0">${me.error ? `<span class="down">${esc(me.error)}</span>` : `Leyendo <b>${esc((me.names || me.accounts || []).join(", "))}</b> (en ${esc(me.currency || "?")})${lastM ? ` · última actualización ${esc(lastM)}` : ""}.`}</p>
+        <div class="actions"><button class="ctl" data-act="sync" ${S.syncing ? "disabled" : ""}>${S.syncing ? "Actualizando…" : "↻ Actualizar ahora"}</button><button class="ctl" data-act="edit-me">Cambiar el acceso</button><button class="ctl" data-act="me-del">Desconectar</button></div>`;
+    } else {
+      h += `<div class="steps">
+        ${step(1, "Creá una app de Meta <span class='muted'>(una sola vez)</span>", `${ext("https://developers.facebook.com/apps/creation/", "Abrir Meta for Developers")}<div>Nombre: ${copy("Impoluto Numeros")}. En el caso de uso elegí <b>Otro</b> → tipo <b>Empresa</b>, y conectala a tu portfolio comercial.</div>`)}
+        ${step(2, "Creá un usuario del sistema", `${ext("https://business.facebook.com/latest/settings/system_users", "Abrir Usuarios del sistema")}<div><b>Agregar</b> → nombre ${copy("impoluto-numeros")} rol <b>Empleado</b>. Después <b>Asignar activos → Cuentas publicitarias</b> → tu cuenta → <b>Ver rendimiento</b>.</div>`)}
+        ${step(3, "Generá el token", `<div>En ese usuario tocá <b>Generar token</b> → elegí la app del paso 1 → vencimiento <b>Nunca</b> → tildá solo ${copy("ads_read")} → <b>Generar</b> y copiá el token.</div>`)}
+        ${step(4, "Pegá el token y tu cuenta acá", `<div>El número de la cuenta lo ves en el ${ext("https://adsmanager.facebook.com/adsmanager/manage/campaigns", "Administrador de anuncios")} arriba a la izquierda (o en la dirección, después de <code>act=</code>).</div>
+          <div class="form" style="margin-top:4px"><label class="f"><span>Token</span><input class="in" id="me-token" type="password" autocomplete="off" placeholder="empieza con EAA…"></label>
+          <label class="f"><span>Número de cuenta publicitaria</span><input class="in" id="me-acc" placeholder="1234567890" value="${esc((me.accounts || []).map((a) => a.replace("act_", "")).join(", "))}"><small>Si tenés varias, separalas con coma.</small></label></div>
+          <div class="actions"><button class="ctl pri" data-act="me-save">Conectar Meta</button>${me.connected ? '<button class="ctl" data-act="edit-me">Cancelar</button>' : ""}</div>`)}
+      </div>`;
+    }
+    h += `</div><p class="note">Se actualiza sola todos los días a las 6 de la mañana y cada vez que abrís la app (si pasó más de una hora).${cn.cron ? "" : " Falta la variable CRON_SECRET en Vercel para la actualización diaria."} <a href="#" data-act="sync-full">Volver a traer los últimos 60 días</a></p>`;
   }
   if (S.cfgSub === "costos") {
     h += `<div class="card"><h3>Tu dólar</h3><div class="form">${num("dolar", "$", "1", "Dólar para pasar el gasto de Meta y el CPA", '<a href="#" data-act="dolarhoy-cfg">Usar el dólar tarjeta de hoy</a>')}${num("recargoAds", "%", "0.1", "Recargo sobre el gasto en Meta", "Impuestos o percepciones de la tarjeta sobre Meta. 0 si no tenés.")}</div></div>
@@ -694,8 +744,10 @@ document.addEventListener("focusout", () => setTimeout(() => { if (S.dirty) rend
 // ============ eventos ============
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-fijoadd],[data-fijodel]");
+  const cp = e.target.closest("[data-copy]");
+  if (cp) { e.preventDefault(); navigator.clipboard.writeText(cp.dataset.copy).then(() => toast("Copiado"), () => toast("No se pudo copiar")); return; }
   if (!t) return;
-  if (t.tagName === "A" || t.dataset.act || t.dataset.nav) e.preventDefault();
+  if ((t.tagName === "A" && !t.target) || t.dataset.act || t.dataset.nav) e.preventDefault();
   const d = t.dataset;
   if (d.nav) { S.view = d.nav; localStorage.setItem("imp_view", S.view); if (d.cfgsub) S.cfgSub = d.cfgsub; window.scrollTo(0, 0); return render(); }
   if (d.cfgsub) { S.cfgSub = d.cfgsub; return render(); }
@@ -722,6 +774,8 @@ document.addEventListener("click", async (e) => {
     if (act === "close") closeModal();
     else if (act === "logout") window.impolutoLogout();
     else if (act === "sync") sync();
+    else if (act === "edit-sh") { S.editSh = !S.editSh; render(); }
+    else if (act === "edit-me") { S.editMe = !S.editMe; render(); }
     else if (act === "sync-full") sync("all", { full: true, days: 60 });
     else if (act === "g-save") await saveGasto(d.id);
     else if (act === "g-del") { await db.doc("gastos/" + d.id).delete(); closeModal(); toast("Gasto eliminado"); }
@@ -742,14 +796,12 @@ document.addEventListener("click", async (e) => {
     else if (act === "sh-save") {
       t.disabled = true; t.textContent = "Conectando…";
       const r = await api("/api/connect", { method: "POST", body: JSON.stringify({ which: "shopify", shop: $("#sh-shop").value, clientId: $("#sh-id").value, clientSecret: $("#sh-secret").value }) });
-      toast("Conectada: " + r.name); await loadConn(); sync("shopify", { full: true });
+      toast("Conectada: " + r.name); S.editSh = false; await loadConn(); sync("shopify", { full: true });
     }
     else if (act === "me-save") {
       t.disabled = true; t.textContent = "Conectando…";
-      const vence = $("#me-vence").value;
       const r = await api("/api/connect", { method: "POST", body: JSON.stringify({ which: "meta", token: $("#me-token").value, accounts: $("#me-acc").value }) });
-      saveCostos({ metaVence: vence || null });
-      toast("Meta conectado: " + r.names.join(", ")); await loadConn(); sync("meta", { full: true });
+      toast("Meta conectado: " + r.names.join(", ")); S.editMe = false; await loadConn(); sync("meta", { full: true });
     }
     else if (act === "sh-del" || act === "me-del") {
       await api("/api/connect", { method: "DELETE", body: JSON.stringify({ which: act === "sh-del" ? "shopify" : "meta" }) });
