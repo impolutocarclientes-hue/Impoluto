@@ -59,7 +59,7 @@ export async function syncMeta(cfg, prev, opts = {}) {
 
 export async function syncMp(cfg, prev, opts = {}) {
   // Doble control: si el acceso guardado puede escribir, no se usa.
-  if (tieneEscritura(String(cfg.scope || "").split(/[\s,]+/).filter(Boolean))) throw new Error("El acceso de Mercado Pago guardado puede escribir: no se usa. Desconectalo y volvé a conectar.");
+  if (!cfg.amplio && tieneEscritura(String(cfg.scope || "").split(/[\s,]+/).filter(Boolean))) throw new Error("El acceso de Mercado Pago guardado puede escribir: no se usa. Desconectalo y volvé a conectar.");
   // Primera vez: 60 días. Después: lo actualizado desde el último sync, con un día de margen
   // (los cobros cambian de estado cuando se liberan o se devuelven).
   const since = opts.full || !prev || !prev.lastUpdated
@@ -75,7 +75,7 @@ export async function syncMp(cfg, prev, opts = {}) {
   }
   // Token de la propia cuenta (client credentials): se pide uno nuevo cuando falta una semana para que venza.
   if (cfg.cc && opts.app && cfg.exp && cfg.exp - Date.now() < 7 * 864e5) {
-    cfg = { ...cfg, ...(await tokenSoloLectura(opts.app)) };
+    cfg = { ...cfg, ...(await tokenSoloLectura(opts.app, { amplio: !!cfg.amplio })) };
     await redis.hset(SECRETS, { mp: JSON.stringify(cfg) });
   }
   const pays = await fetchPayments(cfg.token, since);

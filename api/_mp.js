@@ -88,9 +88,10 @@ export function clientCredentials(app) {
   return oauthToken({ client_id: app.clientId, client_secret: app.clientSecret, grant_type: "client_credentials" });
 }
 // Pide el token y lo acepta SOLO si no tiene permiso de escritura.
-export async function tokenSoloLectura(app) {
+export async function tokenSoloLectura(app, { amplio = false } = {}) {
   const t = await clientCredentials(app);
   const scopes = String(t.scope || "").split(/[\s,]+/).filter(Boolean);
-  if (tieneEscritura(scopes)) throw new Error("Mercado Pago dio un acceso que puede escribir (cobrar, devolver o tocar tarjetas), aunque la aplicación esté en solo lectura. No lo guardamos.");
-  return { token: t.access_token, exp: Date.now() + (Number(t.expires_in) || 15552000) * 1000, scope: scopes.join(" ") || "read", cc: true };
+  // Solo se acepta un acceso que puede escribir si el usuario lo confirmó (amplio). La app igual solo hace GET.
+  if (!amplio && tieneEscritura(scopes)) throw new Error("Mercado Pago dio un acceso que puede escribir (cobrar, devolver o tocar tarjetas), aunque la aplicación esté en solo lectura. No lo guardamos: si querés conectarlo igual, tildá la casilla de acceso amplio.");
+  return { token: t.access_token, exp: Date.now() + (Number(t.expires_in) || 15552000) * 1000, scope: scopes.join(" ") || "read", cc: true, amplio: amplio && tieneEscritura(scopes) };
 }

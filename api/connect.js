@@ -15,7 +15,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       shopify: sec.shopify ? { connected: true, shop: sec.shopify.shop, fromEnv: !!process.env.SHOPIFY_CLIENT_SECRET, ...(st.shopify || {}) } : { connected: false },
       meta: sec.meta ? { connected: true, accounts: sec.meta.accounts, fromEnv: !!process.env.META_TOKEN, savedAt: sec.meta.savedAt || null, ...(st.meta || {}) } : { connected: false },
-      mp: sec.mp ? { connected: true, scope: sec.mp.scope || "", ...(st.mp || {}) } : { connected: false, app: !!sec.mpApp, ...(st.mp && st.mp.error ? { error: st.mp.error } : {}) },
+      mp: sec.mp ? { connected: true, amplio: !!sec.mp.amplio, ...(st.mp || {}) } : { connected: false, app: !!sec.mpApp, ...(st.mp && st.mp.error ? { error: st.mp.error } : {}) },
       sync: st.sync || null,
       cron: !!process.env.CRON_SECRET,
     });
@@ -67,11 +67,11 @@ export default async function handler(req, res) {
     if (!/^\d{6,20}$/.test(clientId)) return res.status(400).json({ error: "El Client ID de Mercado Pago son solo números (es el número de la aplicación)." });
     if (clientSecret.length < 20) return res.status(400).json({ error: "Falta el Client secret de la aplicación." });
     try {
-      const t = await tokenSoloLectura({ clientId, clientSecret });
+      const t = await tokenSoloLectura({ clientId, clientSecret }, { amplio: body.amplio === true });
       const u = await mpMe(t.token);
       await redis.hset(SECRETS, { mpApp: JSON.stringify({ clientId, clientSecret }), mp: JSON.stringify({ ...t, userId: u.id }) });
-      await setStatus("mp", { ok: true, name: u.nickname, userId: u.id, scope: t.scope, error: null });
-      return res.status(200).json({ ok: true, name: u.nickname, scope: t.scope });
+      await setStatus("mp", { ok: true, name: u.nickname, userId: u.id, amplio: !!t.amplio, error: null });
+      return res.status(200).json({ ok: true, name: u.nickname, amplio: !!t.amplio });
     } catch (e) {
       return res.status(400).json({ error: e.message });
     }
