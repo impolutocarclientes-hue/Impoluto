@@ -1,0 +1,18 @@
+{
+  "crons": [
+    { "path": "/api/sync", "schedule": "0 9 * * *" }
+  ],
+  "functions": {
+    "api/sync.js": { "maxDuration": 60 }
+  },
+  "rewrites": [
+    { "source": "/_blob/:id", "destination": "/api/file?id=:id" }
+  ],
+  "headers": [
+    { "source": "/(.*)", "headers": [
+      { "key": "X-Frame-Options", "value": "DENY" },
+      { "key": "Referrer-Policy", "value": "same-origin" },
+      { "key": "X-Content-Type-Options", "value": "nosniff" }
+    ]}
+  ]
+}
