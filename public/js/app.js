@@ -607,14 +607,13 @@ function viewConfig() {
       h += `<p style="margin:0">${mp.error ? `<span class="down">${esc(mp.error)}</span>` : `Leyendo los cobros de <b>${esc(mp.name || "tu cuenta")}</b>${lastP ? ` · última actualización ${esc(lastP)}` : ""}. Permisos que dio Mercado Pago: <code>${esc(mp.scope || "read")}</code>: no puede cobrar, devolver ni mover plata.`}</p><p class="note">Solo cuenta las ventas online de Checkout Pro. Las ventas de <b>Mercado Libre</b>, los cobros en persona (Point, QR) y las transferencias que entren a esta cuenta se ignoran: no suman en ventas, comisiones, caja ni impuestos.</p>
         <div class="actions"><button class="ctl" data-act="sync" ${S.syncing ? "disabled" : ""}>${S.syncing ? "Actualizando…" : "↻ Actualizar ahora"}</button><button class="ctl" data-act="edit-mp">Cambiar de cuenta</button><button class="ctl" data-act="mp-del">Desconectar</button></div>`;
     } else {
-      h += `<p class="note">Sirve para tener la <b>comisión real</b> de cada cobro, las <b>retenciones</b> y <b>cuándo te liberan la plata</b>. Autorizás en la pantalla de Mercado Pago <b>solo lectura</b>: la app rechaza cualquier acceso que pueda cobrar, devolver o mover plata. Solo cuenta las ventas online de Checkout Pro: las de <b>Mercado Libre</b> que entren a la misma cuenta se ignoran.</p>${mp.error ? `<p class="banner bad">${esc(mp.error)}</p>` : ""}<div class="steps">
+      h += `<p class="note">Sirve para tener la <b>comisión real</b> de cada cobro, las <b>retenciones</b> y <b>cuándo te liberan la plata</b>. La aplicación queda con permiso de <b>solo lectura</b> y la app rechaza cualquier acceso que pueda cobrar, devolver o mover plata. Solo cuenta las ventas online de Checkout Pro: las de <b>Mercado Libre</b> que entren a la misma cuenta se ignoran.</p>${mp.error ? `<p class="banner bad">${esc(mp.error)}</p>` : ""}<div class="steps">
         ${step(1, "Tu aplicación en Mercado Pago", `${ext("https://www.mercadopago.com.ar/developers/panel/app", "Abrir Mercado Pago Developers")}<div>Entrá a la aplicación <b>Impoluto Numeros</b> (si no existe, <b>Crear aplicación</b> → Checkout Pro → nombre ${copy("Impoluto Numeros")}).</div>`)}
-        ${step(2, "Poné la dirección de regreso", `<div>En la aplicación → <b>Editar</b> (o Configuración) → <b>URLs de redireccionamiento</b>, pegá: ${copy(cb)} y guardá.</div><div>Si te deja elegir permisos, dejá solo <b>read</b> y <b>offline_access</b>.</div>`)}
-        ${step(3, "Pegá los códigos de la aplicación", `<div>Están en <b>Credenciales de producción</b>: <b>Client ID</b> (son números) y <b>Client secret</b>. No uses el Access Token.</div>
+        ${step(2, "Dejá la aplicación en solo lectura", `<div>En la aplicación → <b>⋮ → Editar</b> → <b>Permisos de la aplicación</b>: tildá <b>Lectura</b> y <b>Acceso offline</b>, destildá <b>Escritura</b> y guardá. Si queda Escritura, la app no se conecta.</div>`)}
+        ${step(3, "Pegá los códigos y conectá", `<div>Están en <b>Credenciales → Producción</b>: <b>Client ID</b> (son números) y <b>Client secret</b>. No uses el Access Token.</div>
           <div class="form" style="margin-top:4px"><label class="f"><span>Client ID</span><input class="in" id="mp-cid" autocomplete="off" placeholder="7293837958583626"></label>
-          <label class="f"><span>Client secret</span><input class="in" id="mp-csecret" type="password" autocomplete="off"><small>Lo guardamos bajo llave y nunca se muestra.</small></label></div>`)}
-        ${step(4, "Autorizá solo lectura", `<div>Te lleva a la pantalla oficial de Mercado Pago: revisá que diga la cuenta correcta y tocá <b>Permitir</b>. Después volvés solo acá.</div>
-          <div class="actions"><button class="ctl pri" data-act="mp-auth">Guardar y autorizar en Mercado Pago</button>${mp.connected ? '<button class="ctl" data-act="edit-mp">Cancelar</button>' : ""}</div>`)}
+          <label class="f"><span>Client secret</span><input class="in" id="mp-csecret" type="password" autocomplete="off"><small>Lo guardamos bajo llave y nunca se muestra.</small></label></div>
+          <div class="actions"><button class="ctl pri" data-act="mp-auth">Conectar Mercado Pago (solo lectura)</button>${mp.connected ? '<button class="ctl" data-act="edit-mp">Cancelar</button>' : ""}</div>`)}
       </div>`;
     }
     h += `</div><p class="note">Se actualiza sola todos los días a las 6 de la mañana y cada vez que abrís la app (si pasó más de una hora).${cn.cron ? "" : " Falta la variable CRON_SECRET en Vercel para la actualización diaria."} <a href="#" data-act="sync-full">Volver a traer los últimos 60 días</a></p>`;
@@ -809,9 +808,9 @@ document.addEventListener("click", async (e) => {
     else if (act === "edit-me") { S.editMe = !S.editMe; render(); }
     else if (act === "edit-mp") { S.editMp = !S.editMp; render(); }
     else if (act === "mp-auth") {
-      t.disabled = true; t.textContent = "Guardando…";
+      t.disabled = true; t.textContent = "Conectando…";
       const r = await api("/api/connect", { method: "POST", body: JSON.stringify({ which: "mp-app", clientId: $("#mp-cid").value, clientSecret: $("#mp-csecret").value }) });
-      location.href = r.authorize;
+      toast(`Mercado Pago conectado: ${r.name} · permisos: ${r.scope}`); S.editMp = false; await loadConn(); sync("mp", { full: true });
     }
     else if (act === "sync-full") sync("all", { full: true, days: 60 });
     else if (act === "g-save") await saveGasto(d.id);

@@ -1,6 +1,7 @@
 import { redis, SECRETS, STATUS, ORDERS, ADS, ADMETA, MPPAY, isAuthed, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
 import { shopHost, getToken, shopInfo } from "./_shopify.js";
 import { accountInfo, actId } from "./_meta.js";
+import { tokenSoloLectura, me as mpMe } from "./_mp.js";
 
 // Conexiones: guarda los códigos de Shopify y el acceso de Meta. Los secretos nunca vuelven al navegador.
 export default async function handler(req, res) {
@@ -65,8 +66,15 @@ export default async function handler(req, res) {
     const clientId = String(body.clientId || "").trim(), clientSecret = String(body.clientSecret || "").trim();
     if (!/^\d{6,20}$/.test(clientId)) return res.status(400).json({ error: "El Client ID de Mercado Pago son solo números (es el número de la aplicación)." });
     if (clientSecret.length < 20) return res.status(400).json({ error: "Falta el Client secret de la aplicación." });
-    await redis.hset(SECRETS, { mpApp: JSON.stringify({ clientId, clientSecret }) });
-    return res.status(200).json({ ok: true, authorize: "/api/mp-auth" });
+    try {
+      const t = await tokenSoloLectura({ clientId, clientSecret });
+      const u = await mpMe(t.token);
+      await redis.hset(SECRETS, { mpApp: JSON.stringify({ clientId, clientSecret }), mp: JSON.stringify({ ...t, userId: u.id }) });
+      await setStatus("mp", { ok: true, name: u.nickname, userId: u.id, scope: t.scope, error: null });
+      return res.status(200).json({ ok: true, name: u.nickname, scope: t.scope });
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
   }
 
   if (req.method === "DELETE") {
