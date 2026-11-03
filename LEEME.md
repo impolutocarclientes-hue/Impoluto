@@ -45,6 +45,7 @@ En la app, entrá a **Configuración → Conexiones** y seguí los pasos que apa
 
 - **Shopify:** creás una app propia en dev.shopify.com, con permisos de solo lectura (`read_orders,read_products,read_inventory,read_reports`), la instalás en la tienda y pegás el Client ID y el Client secret. El token se renueva solo cada 24 horas.
 - **Meta:** pegás un token de un usuario del sistema con permiso `ads_read` (que no vence) y el ID de la cuenta publicitaria.
+- **Mercado Pago (solo lectura):** en tu aplicación de Mercado Pago cargás la URL de redireccionamiento `https://TU-APP.vercel.app/api/mp-callback`, pegás en la app el Client ID y el Client secret, y autorizás en la pantalla oficial de Mercado Pago. La app **rechaza y no guarda cualquier acceso con permiso de escritura**: solo acepta tokens `read`. Con eso usa la comisión real de cada cobro, separa las retenciones (pagos a cuenta) y la caja cuenta la plata el día que se libera. El token se renueva solo.
 
 Apenas conectás, la app trae los últimos 60 días.
 
