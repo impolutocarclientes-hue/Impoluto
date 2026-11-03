@@ -43,7 +43,9 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST" && body.which === "meta") {
-    const token = String(body.token || "").trim();
+    // Sin token nuevo: se reutiliza el guardado (para cambiar solo la cuenta publicitaria).
+    const prevMeta = (await getSecrets()).meta;
+    const token = String(body.token || "").trim() || (prevMeta && prevMeta.token) || "";
     let accounts;
     try { accounts = String(body.accounts || "").split(/[\s,]+/).filter(Boolean).map(actId); } catch (e) { return res.status(400).json({ error: e.message }); }
     if (!token || token.length < 40) return res.status(400).json({ error: "Pegá el token de acceso de Meta." });

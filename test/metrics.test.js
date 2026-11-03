@@ -68,15 +68,15 @@ test("día argentino", () => {
 
 test("Mercado Pago: comisión real reemplaza la estimada y separa retenciones", () => {
   const o1 = order(1, "2026-10-10", 1, 42990);
-  const pay = { id: "p1", desc: "Compra en Impoluto", c: "2026-10-10T15:00:00.000-03:00", a: "2026-10-10T15:00:01.000-03:00", rel: "2026-10-24T15:00:00.000-03:00", rs: "pending", st: "approved", op: "regular_payment", monto: 42990, devuelto: 0, comision: 3000, retenciones: 1000, neto: 38990, cu: 1 };
+  const pay = { id: "p1", desc: "Compra en Impoluto", c: "2026-10-10T12:00:00.000-03:00", a: "2026-10-10T12:00:01.000-03:00", rel: "2026-10-24T15:00:00.000-03:00", rs: "pending", st: "approved", op: "regular_payment", monto: 42990, devuelto: 0, comision: 3000, retenciones: 1000, neto: 38990, cu: 1 };
   const base = { orders: [o1], ads: [], meta: {}, costos, prods };
   const sin = M.resumen(base, "2026-10-10", "2026-10-10");
-  const con = M.resumen({ ...base, pays: [pay] }, "2026-10-10", "2026-10-10");
+  const con = M.resumen({ ...base, orders: M.vincularPagos([o1], [pay]), pays: [pay] }, "2026-10-10", "2026-10-10");
   assert.equal(con.mp, 3000);
   assert.equal(con.mpReal.retenciones, 1000);
   const k = 0.21 / 1.21;
   assert.ok(Math.abs((con.ganancia - sin.ganancia) - (sin.mp - 3000) * (1 - k)) < 1e-6);
-  const serie = M.serieDiaria({ ...base, pays: [pay] }, "2026-10-10", "2026-10-10");
+  const serie = M.serieDiaria({ ...base, orders: M.vincularPagos([o1], [pay]), pays: [pay] }, "2026-10-10", "2026-10-10");
   assert.ok(Math.abs(serie[0].ganancia - con.ganancia) < 1e-6);
   const lib = M.mpALiberar([pay], "2026-10-12T00:00:00Z");
   assert.equal(lib.total, 38990);

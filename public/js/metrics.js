@@ -172,15 +172,15 @@ export function resumen({ orders, ads, meta, costos, prods, pays }, from, to) {
   const anuncios = spendBase * conv.recargo;
   const fijos = fijosEnRango(cfg, from, to);
   // Con Mercado Pago conectado usamos la comisión real de los cobros en vez del % estimado.
+  // Cada pedido vinculado a su cobro ya trae la comisión real (costoPedido); el resto, la estimada.
   const real = mpCobros(pays, from, to);
   const mpEst = T("mp");
-  const mpUsado = real ? real.comision : mpEst;
-  const ivaK = cfg.regimen === "mono" ? 0 : 0.21 / 1.21; // la comisión trae IVA que descontás
-  const ajusteMp = real ? (mpEst - mpUsado) : 0;
-  const ivaCredito = T("ivaCredito") - ajusteMp * ivaK;
+  const mpUsado = mpEst;
+  const ajusteMp = 0;
+  const ivaCredito = T("ivaCredito");
   const ivaPagar = T("ivaDebito") - ivaCredito;
   const cobroImp = mpUsado + T("shopify") + T("iibb") + ivaPagar;
-  const margenAntes = T("margen") + ajusteMp * (1 - ivaK);
+  const margenAntes = T("margen");
   const ganancia = margenAntes - anuncios - fijos.total;
   const netas = ventas - T("producto") - T("envio") - T("armado") - mpUsado - T("shopify");
   const nPag = pagados.length;
@@ -243,14 +243,6 @@ export function serieDiaria(ctx, from, to) {
     dias[d].ventas += c.venta; dias[d].margen += c.margen; dias[d].pedidos++;
   });
   ctx.ads.forEach((a) => { if (dias[a.d]) dias[a.d].anuncios += n(a.sp) * conv.k * conv.recargo; });
-  if (ctx.pays && ctx.pays.length) {
-    // Igual que en el resumen: comisión real de Mercado Pago en vez de la estimada.
-    const ivaK = cfg.regimen === "mono" ? 0 : 0.21 / 1.21;
-    const est = {}, real = {};
-    ctx.orders.forEach((o) => { const d = dayOf(o.c); if (dias[d] && estado(o) === "pagado") est[d] = (est[d] || 0) + costoPedido(o, cfg, ctx.prods).mp; });
-    ctx.pays.forEach((p) => { if (!esCobroVenta(p)) return; const d = dayOf(p.a || p.c); if (dias[d]) real[d] = (real[d] || 0) + n(p.comision); });
-    Object.keys(dias).forEach((d) => { dias[d].margen += ((est[d] || 0) - (real[d] || 0)) * (1 - ivaK); });
-  }
   return Object.values(dias).map((x) => ({ ...x, ganancia: x.margen - x.anuncios - x.fijos }));
 }
 
