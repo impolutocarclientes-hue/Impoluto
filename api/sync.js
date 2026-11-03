@@ -1,7 +1,7 @@
 import { redis, ORDERS, ADS, ADMETA, MPPAY, isAuthed, isCron, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
 import { fetchOrders, fetchSessions } from "./_shopify.js";
 import { insightsByDay, frequency7d, campaigns, accountInfo } from "./_meta.js";
-import { fetchPayments, refreshToken, tokenSoloLectura } from "./_mp.js";
+import { fetchPayments, refreshToken, tokenSoloLectura, tieneEscritura } from "./_mp.js";
 import { SECRETS } from "./_lib.js";
 
 export const config = { maxDuration: 60 };
@@ -58,6 +58,8 @@ export async function syncMeta(cfg, prev, opts = {}) {
 }
 
 export async function syncMp(cfg, prev, opts = {}) {
+  // Doble control: si el acceso guardado puede escribir, no se usa.
+  if (tieneEscritura(String(cfg.scope || "").split(/[\s,]+/).filter(Boolean))) throw new Error("El acceso de Mercado Pago guardado puede escribir: no se usa. Desconectalo y volvé a conectar.");
   // Primera vez: 60 días. Después: lo actualizado desde el último sync, con un día de margen
   // (los cobros cambian de estado cuando se liberan o se devuelven).
   const since = opts.full || !prev || !prev.lastUpdated
@@ -67,7 +69,7 @@ export async function syncMp(cfg, prev, opts = {}) {
   if (cfg.oauth && cfg.refresh && opts.app && cfg.exp && cfg.exp - Date.now() < 30 * 864e5) {
     const t = await refreshToken(opts.app, cfg.refresh);
     const scopes = String(t.scope || "").split(/[\s,]+/).filter(Boolean);
-    if (scopes.includes("write")) throw new Error("Mercado Pago devolvió un acceso con permiso de escritura: no lo usamos. Volvé a autorizar solo lectura.");
+    if (tieneEscritura(scopes)) throw new Error("Mercado Pago devolvió un acceso con permiso de escritura: no lo usamos. Volvé a autorizar solo lectura.");
     cfg = { ...cfg, token: t.access_token, refresh: t.refresh_token || cfg.refresh, exp: Date.now() + (Number(t.expires_in) || 15552000) * 1000 };
     await redis.hset(SECRETS, { mp: JSON.stringify(cfg) });
   }

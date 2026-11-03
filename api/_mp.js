@@ -80,6 +80,9 @@ export function exchangeCode(app, code, redirectUri) {
 export function refreshToken(app, refresh) {
   return oauthToken({ client_id: app.clientId, client_secret: app.clientSecret, grant_type: "refresh_token", refresh_token: refresh });
 }
+// Cualquier permiso que permita escribir: "write", "read-write", "…/write", etc.
+export const tieneEscritura = (scopes) => scopes.some((s) => /write/i.test(s));
+
 // Token para la propia cuenta (client credentials): lleva solo los permisos configurados en la aplicación.
 export function clientCredentials(app) {
   return oauthToken({ client_id: app.clientId, client_secret: app.clientSecret, grant_type: "client_credentials" });
@@ -88,6 +91,6 @@ export function clientCredentials(app) {
 export async function tokenSoloLectura(app) {
   const t = await clientCredentials(app);
   const scopes = String(t.scope || "").split(/[\s,]+/).filter(Boolean);
-  if (scopes.includes("write")) throw new Error("La aplicación de Mercado Pago tiene permiso de Escritura: no lo usamos. Editá la aplicación, destildá 'Escritura', guardá y probá de nuevo.");
+  if (tieneEscritura(scopes)) throw new Error("Mercado Pago dio un acceso que puede escribir (cobrar, devolver o tocar tarjetas), aunque la aplicación esté en solo lectura. No lo guardamos.");
   return { token: t.access_token, exp: Date.now() + (Number(t.expires_in) || 15552000) * 1000, scope: scopes.join(" ") || "read", cc: true };
 }
