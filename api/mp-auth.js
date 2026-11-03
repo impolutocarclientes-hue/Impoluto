@@ -12,7 +12,7 @@ export default async function handler(req, res) {
   const state = crypto.randomBytes(16).toString("hex");
   await redis.set("impoluto:mp_state:" + state, "1", { ex: 900 }); // vale 15 minutos
   const redirect = `https://${req.headers.host}/api/mp-callback`;
-  const q = new URLSearchParams({ client_id: sec.mpApp.clientId, response_type: "code", platform_id: "mp", state, redirect_uri: redirect, scope: "read offline_access" });
+  const q = new URLSearchParams({ client_id: sec.mpApp.clientId, response_type: "code", platform_id: "mp", state, redirect_uri: redirect });
   res.statusCode = 302;
   res.setHeader("Location", "https://auth.mercadopago.com.ar/authorization?" + q);
   res.end();
