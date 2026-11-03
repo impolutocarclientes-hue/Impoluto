@@ -88,3 +88,11 @@ npm test                # tests de la calculadora y de las métricas
 - Las credenciales de Shopify y Meta se guardan en la base del lado del servidor y nunca vuelven al navegador.
 - Todo es de solo lectura: la app no cambia nada en Shopify ni en Meta.
 - No se guardan nombres, mails ni direcciones de clientes.
+
+## Facturación (ARCA)
+- Pantalla **Facturación**: arma las facturas B (consumidor final) de los pedidos pagados de Shopify. **No factura sola**: se emite solo cuando tocás «Emitir» y confirmás.
+- Conexión directa con ARCA (WSAA + WSFEv1). La clave privada la genera la app y queda en el servidor; ARCA da un certificado que se pega en la app.
+- Antes de pedir el CAE se anota la factura; si se corta la conexión, la próxima emisión consulta en ARCA y no se duplica.
+- El IVA (10,5 % o 21 %) tiene que elegirse a mano: sin eso no se emite nada.
+- Email al cliente por Resend (opcional). El email del pedido se pide a Shopify en el momento y no se guarda; la app de Shopify necesita acceso a datos protegidos de clientes (email).
+- Prueba local sin ARCA real: `FAKE_ARCA=1 node dev/server.js`.

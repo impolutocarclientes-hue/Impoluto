@@ -20,7 +20,7 @@ function run(cmd) {
     case "HDEL": { const h = store.get(a[0]); let n = 0; if (h instanceof Map) for (const f of a.slice(1)) n += h.delete(f) ? 1 : 0; return n; }
     case "DEL": { let n = 0; for (const k of a) n += store.delete(k) ? 1 : 0; return n; }
     case "GET": { const v = store.get(a[0]); return typeof v === "string" ? v : null; }
-    case "SET": store.set(a[0], String(a[1])); return "OK";
+    case "SET": { const o = a.slice(2).map((x) => String(x).toUpperCase()); if (o.includes("NX") && store.has(a[0])) return null; store.set(a[0], String(a[1])); return "OK"; }
     default: throw new Error("cmd no soportado " + C);
   }
 }
@@ -39,6 +39,8 @@ http.createServer(async (req, res) => {
 process.env.KV_REST_API_URL = `http://127.0.0.1:${RPORT}`;
 process.env.KV_REST_API_TOKEN = "dev";
 process.env.APP_PASSWORD = process.env.APP_PASSWORD || "impoluto-dev-1234";
+
+if (process.env.FAKE_ARCA === "1") (await import("./fake-arca.js")).instalarArcaFalso();
 
 // ---- datos de ejemplo ----
 if (process.env.SEED !== "0") {

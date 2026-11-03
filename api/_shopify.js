@@ -162,3 +162,15 @@ export async function fetchSessions(cfg, days = 90) {
     return null;
   }
 }
+
+// Email y nombre del cliente de UN pedido, solo para mandarle su factura (no se guarda en la base).
+// Si la app de Shopify no tiene acceso a datos de clientes, devuelve null y la factura se descarga a mano.
+export async function contactoPedido(cfg, orderId) {
+  try {
+    const d = await gql(cfg, `query($id:ID!){ order(id:$id){ email customer{ firstName lastName } billingAddress{ name } } }`, { id: "gid://shopify/Order/" + orderId });
+    const o = d && d.order;
+    if (!o) return null;
+    const nombre = (o.billingAddress && o.billingAddress.name) || [o.customer && o.customer.firstName, o.customer && o.customer.lastName].filter(Boolean).join(" ");
+    return { email: o.email || null, nombre: nombre || null };
+  } catch { return null; }
+}

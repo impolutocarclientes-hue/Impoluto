@@ -1,0 +1,173 @@
+// Facturación electrónica con ARCA (ex AFIP): login WSAA + web service WSFEv1.
+// La clave privada se genera y queda en el servidor (Redis, hash de secretos): nadie la ve ni la copia.
+import forge from "node-forge";
+import { redis } from "./_lib.js";
+
+const URLS = {
+  prod: { wsaa: "https://wsaa.afip.gov.ar/ws/services/LoginCms", wsfe: "https://servicios1.afip.gov.ar/wsfev1/service.asmx" },
+  homo: { wsaa: "https://wsaahomo.afip.gov.ar/ws/services/LoginCms", wsfe: "https://wswhomo.afip.gov.ar/wsfev1/service.asmx" },
+};
+export const TA_KEY = "impoluto:arca_ta"; // ticket de acceso cacheado (vale 12 h; ARCA no da otro mientras siga vigente)
+
+export const ALICUOTAS = { "10.5": 4, "21": 5 }; // Id de alícuota en ARCA
+export const FACTURA_B = 6, NC_B = 8;
+export const COND_IVA_CONSUMIDOR_FINAL = 5;
+
+export const cuitValido = (c) => {
+  const s = String(c || "").replace(/\D/g, "");
+  if (s.length !== 11) return false;
+  const w = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
+  const r = 11 - (w.reduce((a, x, i) => a + x * Number(s[i]), 0) % 11);
+  const dv = r === 11 ? 0 : r === 10 ? 9 : r;
+  return dv === Number(s[10]);
+};
+
+// 1) Clave + pedido de certificado (CSR) para subir a ARCA.
+export function nuevaClave(cuit, alias = "impolutoapp") {
+  const keys = forge.pki.rsa.generateKeyPair(2048);
+  const csr = forge.pki.createCertificationRequest();
+  csr.publicKey = keys.publicKey;
+  csr.setSubject([
+    { name: "countryName", value: "AR" },
+    { name: "organizationName", value: "Impoluto" },
+    { name: "commonName", value: alias },
+    { type: "2.5.4.5", value: "CUIT " + String(cuit).replace(/\D/g, ""), valueTagClass: forge.asn1.Type.PRINTABLESTRING }, // serialNumber
+  ]);
+  csr.sign(keys.privateKey, forge.md.sha256.create());
+  return { key: forge.pki.privateKeyToPem(keys.privateKey), csr: forge.pki.certificationRequestToPem(csr) };
+}
+
+// 2) El certificado que devuelve ARCA tiene que corresponder a la clave guardada.
+export function certCorresponde(certPem, keyPem) {
+  const cert = forge.pki.certificateFromPem(certPem);
+  const key = forge.pki.privateKeyFromPem(keyPem);
+  const ok = cert.publicKey.n.equals(key.n) && cert.publicKey.e.equals(key.e);
+  return { ok, vence: cert.validity.notAfter.toISOString(), cn: (cert.subject.getField("CN") || {}).value || "" };
+}
+
+// ---------- SOAP mínimo ----------
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export const tag = (xml, name) => { const m = String(xml).match(new RegExp(`<(?:\\w+:)?${name}[^>]*>([\\s\\S]*?)</(?:\\w+:)?${name}>`)); return m ? m[1] : null; };
+export const tags = (xml, name) => [...String(xml).matchAll(new RegExp(`<(?:\\w+:)?${name}[^>]*>([\\s\\S]*?)</(?:\\w+:)?${name}>`, "g"))].map((m) => m[1]);
+const unesc = (s) => String(s || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+
+async function soap(url, action, body, fetchImpl = fetch) {
+  const env = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>${body}</soap:Body></soap:Envelope>`;
+  const r = await fetchImpl(url, { method: "POST", headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: action }, body: env, signal: AbortSignal.timeout(25000) });
+  const txt = await r.text();
+  const fault = tag(txt, "faultstring");
+  if (fault) throw new Error("ARCA: " + unesc(fault));
+  if (!r.ok) throw new Error("ARCA respondió " + r.status);
+  return txt;
+}
+
+// 3) Login en WSAA: firma el pedido con la clave y el certificado, devuelve token + sign.
+function tra(service) {
+  const now = Date.now();
+  const f = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
+  return `<?xml version="1.0" encoding="UTF-8"?><loginTicketRequest version="1.0"><header><uniqueId>${Math.floor(now / 1000)}</uniqueId><generationTime>${f(now - 600000)}</generationTime><expirationTime>${f(now + 600000)}</expirationTime></header><service>${service}</service></loginTicketRequest>`;
+}
+export function firmarTra(xml, certPem, keyPem) {
+  const p7 = forge.pkcs7.createSignedData();
+  p7.content = forge.util.createBuffer(xml, "utf8");
+  p7.addCertificate(certPem);
+  p7.addSigner({
+    key: forge.pki.privateKeyFromPem(keyPem),
+    certificate: forge.pki.certificateFromPem(certPem),
+    digestAlgorithm: forge.pki.oids.sha256,
+    authenticatedAttributes: [
+      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
+      { type: forge.pki.oids.messageDigest },
+      { type: forge.pki.oids.signingTime, value: new Date() },
+    ],
+  });
+  p7.sign();
+  return forge.util.encode64(forge.asn1.toDer(p7.toAsn1()).getBytes());
+}
+
+export async function ticket(cfg, { fetchImpl = fetch, force = false } = {}) {
+  const ent = cfg.entorno === "homo" ? "homo" : "prod";
+  const cacheKey = TA_KEY + ":" + ent + ":" + cfg.cuit;
+  const c = await redis.get(cacheKey);
+  const cached = typeof c === "string" ? JSON.parse(c) : c;
+  const vigente = cached && cached.exp && Date.parse(cached.exp) - Date.now() > 10 * 60e3;
+  if (!force && vigente) return cached;
+  const cms = firmarTra(tra("wsfe"), cfg.cert, cfg.key);
+  let xml;
+  try {
+    xml = await soap(URLS[ent].wsaa, "", `<loginCms xmlns="http://wsaa.view.sua.dvadac.desein.afip.gov"><in0>${cms}</in0></loginCms>`, fetchImpl);
+  } catch (e) {
+    // ARCA no da un acceso nuevo mientras el anterior siga vigente: se usa el guardado.
+    if (vigente && /TA valido/i.test(e.message)) return cached;
+    throw e;
+  }
+  const ret = unesc(tag(xml, "loginCmsReturn"));
+  const ta = { token: tag(ret, "token"), sign: tag(ret, "sign"), exp: tag(ret, "expirationTime") };
+  if (!ta.token || !ta.sign) throw new Error("ARCA no devolvió el acceso (revisá que el certificado esté asociado al servicio de factura electrónica).");
+  await redis.set(cacheKey, JSON.stringify(ta), { ex: 12 * 3600 });
+  return ta;
+}
+
+// ---------- WSFEv1 ----------
+const FE = "http://ar.gov.afip.dif.FEV1/";
+function auth(ta, cuit) { return `<Auth><Token>${ta.token}</Token><Sign>${ta.sign}</Sign><Cuit>${String(cuit).replace(/\D/g, "")}</Cuit></Auth>`; }
+async function fe(cfg, metodo, inner, opts = {}) {
+  const ta = await ticket(cfg, opts);
+  const ent = cfg.entorno === "homo" ? "homo" : "prod";
+  const xml = await soap(URLS[ent].wsfe, FE + metodo, `<${metodo} xmlns="${FE}">${auth(ta, cfg.cuit)}${inner}</${metodo}>`, opts.fetchImpl);
+  const errs = tags(tag(xml, "Errors") || "", "Err").map((e) => `${tag(e, "Code")}: ${unesc(tag(e, "Msg"))}`);
+  return { xml, errs };
+}
+
+export async function puntosDeVenta(cfg, opts) {
+  const { xml, errs } = await fe(cfg, "FEParamGetPtosVenta", "", opts);
+  const pts = tags(xml, "PtoVenta").map((p) => ({ nro: Number(tag(p, "Nro")), tipo: tag(p, "EmisionTipo"), baja: tag(p, "Bloqueado") === "S" || (tag(p, "FchBaja") || "NULL") !== "NULL" }));
+  // "602: Sin resultados" = todavía no hay puntos de venta para web service.
+  if (!pts.length && errs.length && !errs.some((e) => e.startsWith("602"))) throw new Error(errs.join(" · "));
+  return pts;
+}
+
+export async function ultimoNumero(cfg, tipo = FACTURA_B, opts) {
+  const { xml, errs } = await fe(cfg, "FECompUltimoAutorizado", `<PtoVta>${cfg.ptoVta}</PtoVta><CbteTipo>${tipo}</CbteTipo>`, opts);
+  const n = tag(xml, "CbteNro");
+  if (n == null) throw new Error(errs.join(" · ") || "ARCA no devolvió el último número.");
+  return Number(n);
+}
+
+export async function consultar(cfg, nro, tipo = FACTURA_B, opts) {
+  const { xml, errs } = await fe(cfg, "FECompConsultar", `<FeCompConsReq><CbteTipo>${tipo}</CbteTipo><CbteNro>${nro}</CbteNro><PtoVta>${cfg.ptoVta}</PtoVta></FeCompConsReq>`, opts);
+  const r = tag(xml, "ResultGet");
+  if (!r) return { existe: false, errs };
+  return { existe: true, cae: tag(r, "CodAutorizacion"), vto: tag(r, "FchVto"), total: Number(tag(r, "ImpTotal")), fecha: tag(r, "CbteFch"), resultado: tag(r, "Resultado") };
+}
+
+// Montos de una factura B: el total trae el IVA adentro.
+export function montos(total, alicuota) {
+  const t = Math.round(Number(total) * 100) / 100;
+  const r = Number(alicuota) / 100;
+  const neto = Math.round((t / (1 + r)) * 100) / 100;
+  const iva = Math.round((t - neto) * 100) / 100;
+  return { total: t, neto, iva };
+}
+
+// Pide el CAE de UN comprobante con número fijo. Devuelve {ok, cae, vto} o {ok:false, errs, obs}.
+export async function solicitarCae(cfg, { nro, fecha, total, alicuota, tipo = FACTURA_B, asociado = null }, opts) {
+  const ivaId = ALICUOTAS[String(alicuota)];
+  if (!ivaId) throw new Error("Alícuota de IVA sin definir.");
+  const m = montos(total, alicuota);
+  const asoc = asociado ? `<CbtesAsoc><CbteAsoc><Tipo>${asociado.tipo}</Tipo><PtoVta>${asociado.pto}</PtoVta><Nro>${asociado.nro}</Nro><Cuit>${String(cfg.cuit).replace(/\D/g, "")}</Cuit><CbteFch>${asociado.fecha}</CbteFch></CbteAsoc></CbtesAsoc>` : "";
+  const det = `<FECAEDetRequest><Concepto>1</Concepto><DocTipo>99</DocTipo><DocNro>0</DocNro><CbteDesde>${nro}</CbteDesde><CbteHasta>${nro}</CbteHasta><CbteFch>${fecha}</CbteFch><ImpTotal>${m.total.toFixed(2)}</ImpTotal><ImpTotConc>0.00</ImpTotConc><ImpNeto>${m.neto.toFixed(2)}</ImpNeto><ImpOpEx>0.00</ImpOpEx><ImpTrib>0.00</ImpTrib><ImpIVA>${m.iva.toFixed(2)}</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz><CondicionIVAReceptorId>${COND_IVA_CONSUMIDOR_FINAL}</CondicionIVAReceptorId>${asoc}<Iva><AlicIva><Id>${ivaId}</Id><BaseImp>${m.neto.toFixed(2)}</BaseImp><Importe>${m.iva.toFixed(2)}</Importe></AlicIva></Iva></FECAEDetRequest>`;
+  const inner = `<FeCAEReq><FeCabReq><CantReg>1</CantReg><PtoVta>${cfg.ptoVta}</PtoVta><CbteTipo>${tipo}</CbteTipo></FeCabReq><FeDetReq>${det}</FeDetReq></FeCAEReq>`;
+  const { xml, errs } = await fe(cfg, "FECAESolicitar", inner, opts);
+  const d = tag(xml, "FECAEDetResponse") || "";
+  const obs = tags(tag(d, "Observaciones") || "", "Obs").map((o) => `${tag(o, "Code")}: ${unesc(tag(o, "Msg"))}`);
+  if (tag(d, "Resultado") === "A") return { ok: true, cae: tag(d, "CAE"), vto: tag(d, "CAEFchVto"), obs, ...m };
+  return { ok: false, errs, obs, ...m };
+}
+
+// Contenido del QR obligatorio (RG 4892).
+export function qrUrl(cfg, f) {
+  const fecha = `${f.fecha.slice(0, 4)}-${f.fecha.slice(4, 6)}-${f.fecha.slice(6, 8)}`;
+  const data = { ver: 1, fecha, cuit: Number(String(cfg.cuit).replace(/\D/g, "")), ptoVta: Number(f.pto), tipoCmp: f.tipo, nroCmp: f.nro, importe: f.total, moneda: "PES", ctz: 1, tipoDocRec: 99, nroDocRec: 0, tipoCodAut: "E", codAut: Number(f.cae) };
+  return "https://www.afip.gob.ar/fe/qr/?p=" + Buffer.from(JSON.stringify(data)).toString("base64");
+}

@@ -1,5 +1,6 @@
 import * as M from "./metrics.js";
 import { calcular, cpaPotencial, CALC_DEFAULTS } from "./calc.js";
+import { initFacturas, viewFacturas, onFactClick, onFactChange, cargarFacturas } from "./facturas.js";
 
 // ============ utilidades ============
 const $ = (s, el = document) => el.querySelector(s);
@@ -20,6 +21,7 @@ const csvCell = (v) => { const s = String(v == null ? "" : v); return /[",;\n]/.
 function shortDate(d) { const [y, m, dd] = d.split("-").map(Number); return new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString("es-AR", { day: "numeric", month: "short", timeZone: "UTC" }).replace(".", ""); }
 function longDate(d) { const [y, m, dd] = d.split("-").map(Number); return new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }); }
 function monthName(ym) { const [y, m] = ym.split("-").map(Number); const s = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "UTC" }); return s.charAt(0).toUpperCase() + s.slice(1); }
+initFacturas({ api, toast, render, esc, money: ars });
 function toast(msg) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), Math.max(2600, msg.length * 55)); }
 
 const ICON = {
@@ -185,7 +187,7 @@ function block(id, title, inner, right = "") { return `<section class="block" id
 const VIEWS = [
   ["dashboard", "Tu plata", "dash"], ["anuncios", "Anuncios", "ads"], ["caja", "Caja", "caja"],
   ["impuestos", "Impuestos", "imp"], ["socios", "Socios", "socios"], ["gastos", "Gastos", "gastos"],
-  ["calculadora", "Calculadora", "calc"], ["config", "Configuración", "cfg"],
+  ["facturas", "Facturación", "imp"], ["calculadora", "Calculadora", "calc"], ["config", "Configuración", "cfg"],
 ];
 function sideHTML() {
   const c = S.conn || {};
@@ -771,16 +773,16 @@ function csvGastos() {
 // ============ render ============
 function render() {
   const a = document.activeElement;
-  if (a && a.matches && a.matches("#view input, #view select") && a.type !== "checkbox") return void (S.dirty = true);
+  if (a && a.matches && a.matches("#view input, #view select, #view textarea") && a.type !== "checkbox" && a.type !== "file") return void (S.dirty = true);
   S.dirty = false;
   const scroll = window.scrollY;
   $("#side").innerHTML = sideHTML();
   $("#topr").innerHTML = topRight();
-  const V = { dashboard: viewDashboard, anuncios: viewAnuncios, caja: viewCaja, impuestos: viewImpuestos, socios: viewSocios, gastos: viewGastos, calculadora: viewCalc, config: viewConfig };
+  const V = { dashboard: viewDashboard, anuncios: viewAnuncios, caja: viewCaja, impuestos: viewImpuestos, socios: viewSocios, gastos: viewGastos, calculadora: viewCalc, config: viewConfig, facturas: viewFacturas };
   $("#title").textContent = (VIEWS.find((v) => v[0] === S.view) || VIEWS[0])[1];
   // Lo que el usuario está escribiendo en un formulario no se borra cuando la pantalla se actualiza sola.
   const kept = {};
-  document.querySelectorAll("#view input[id], #modal input[id]").forEach((i) => { if (i.type !== "checkbox" && i.value) kept[i.id] = i.value; });
+  document.querySelectorAll("#view input[id], #view textarea[id], #modal input[id]").forEach((i) => { if (i.type !== "checkbox" && i.type !== "file" && i.value) kept[i.id] = i.value; });
   try { $("#view").innerHTML = (V[S.view] || viewDashboard)(); } catch (e) { console.error(e); $("#view").innerHTML = `<div class="content"><p class="banner bad">Algo falló al armar esta pantalla: ${esc(e.message)}</p></div>`; }
   for (const [id, v] of Object.entries(kept)) { const el = document.getElementById(id); if (el && el.closest("#view") && el.value !== v && !el.readOnly) el.value = v; }
   window.scrollTo(0, scroll);
@@ -789,13 +791,14 @@ document.addEventListener("focusout", () => setTimeout(() => { if (S.dirty) rend
 
 // ============ eventos ============
 document.addEventListener("click", async (e) => {
+  if (await onFactClick(e)) return;
   const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-mpmodo],[data-fijoadd],[data-fijodel]");
   const cp = e.target.closest("[data-copy]");
   if (cp) { e.preventDefault(); navigator.clipboard.writeText(cp.dataset.copy).then(() => toast("Copiado"), () => toast("No se pudo copiar")); return; }
   if (!t) return;
   if ((t.tagName === "A" && !t.target) || t.dataset.act || t.dataset.nav) e.preventDefault();
   const d = t.dataset;
-  if (d.nav) { S.view = d.nav; localStorage.setItem("imp_view", S.view); if (d.cfgsub) S.cfgSub = d.cfgsub; window.scrollTo(0, 0); return render(); }
+  if (d.nav) { S.view = d.nav; localStorage.setItem("imp_view", S.view); if (d.nav === "facturas") cargarFacturas(true); if (d.cfgsub) S.cfgSub = d.cfgsub; window.scrollTo(0, 0); return render(); }
   if (d.cfgsub) { S.cfgSub = d.cfgsub; return render(); }
   if (d.sub) { S.sub = d.sub; return render(); }
   if (d.preset) { setRange(d.preset); return render(); }
@@ -892,6 +895,7 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", async (e) => {
+  if (onFactChange(e)) return;
   const t = e.target, d = t.dataset;
   if (d.range) { S.preset = "custom"; S[d.range] = t.value; if (S.from > S.to) [S.from, S.to] = [S.to, S.from]; return render(); }
   if (d.gcat !== undefined) { S.gastosCat = t.value; return render(); }
