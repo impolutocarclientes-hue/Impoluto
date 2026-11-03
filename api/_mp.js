@@ -40,6 +40,9 @@ export function compactPayment(p) {
     monto, neto, devuelto, comision, retenciones,
     fees: fees.map((f) => ({ t: f.type, m: Number(f.amount) || 0 })),
     ref: p.external_reference || "", desc: String(p.description || "").slice(0, 80),
+    // De dónde vino el cobro: Checkout Pro (online) o en persona (Point, QR), etc.
+    poi: String((p.point_of_interaction && p.point_of_interaction.type) || ""),
+    pid: p.pos_id || p.store_id || null,
   };
 }
 
