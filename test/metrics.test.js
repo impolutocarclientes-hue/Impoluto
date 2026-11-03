@@ -68,7 +68,7 @@ test("día argentino", () => {
 
 test("Mercado Pago: comisión real reemplaza la estimada y separa retenciones", () => {
   const o1 = order(1, "2026-10-10", 1, 42990);
-  const pay = { id: "p1", c: "2026-10-10T15:00:00.000-03:00", a: "2026-10-10T15:00:01.000-03:00", rel: "2026-10-24T15:00:00.000-03:00", rs: "pending", st: "approved", op: "regular_payment", monto: 42990, devuelto: 0, comision: 3000, retenciones: 1000, neto: 38990, cu: 1 };
+  const pay = { id: "p1", desc: "Compra en Impoluto", c: "2026-10-10T15:00:00.000-03:00", a: "2026-10-10T15:00:01.000-03:00", rel: "2026-10-24T15:00:00.000-03:00", rs: "pending", st: "approved", op: "regular_payment", monto: 42990, devuelto: 0, comision: 3000, retenciones: 1000, neto: 38990, cu: 1 };
   const base = { orders: [o1], ads: [], meta: {}, costos, prods };
   const sin = M.resumen(base, "2026-10-10", "2026-10-10");
   const con = M.resumen({ ...base, pays: [pay] }, "2026-10-10", "2026-10-10");
@@ -88,9 +88,10 @@ test("Mercado Pago: comisión real reemplaza la estimada y separa retenciones", 
 });
 
 test("Mercado Pago: solo cuenta ventas online de Checkout Pro", () => {
-  const base = { id: "x", c: "2026-10-10T15:00:00.000-03:00", a: "2026-10-10T15:00:00.000-03:00", st: "approved", op: "regular_payment", monto: 1000, comision: 100, retenciones: 0, neto: 900, devuelto: 0 };
+  const base = { id: "x", desc: "Compra en Impoluto", ref: "rUARs8V8WllLy2iRabcdefghij", c: "2026-10-10T15:00:00.000-03:00", a: "2026-10-10T15:00:00.000-03:00", st: "approved", op: "regular_payment", monto: 1000, comision: 100, retenciones: 0, neto: 900, devuelto: 0 };
   const r = M.mpCobros([base, { ...base, id: "pos", poi: "POINT" }, { ...base, id: "qr", pid: "123" }, { ...base, id: "tr", op: "money_transfer" },
-    { ...base, id: "meli1", mk: "MELI", monto: 50000, comision: 9000 }, { ...base, id: "meli2", ot: "mercadolibre", monto: 30000, comision: 5000 }], "2026-10-10", "2026-10-10");
+    { ...base, id: "meli1", mk: "MELI", monto: 50000, comision: 9000 }, { ...base, id: "meli2", ot: "mercadolibre", monto: 30000, comision: 5000 },
+    { ...base, id: "liq", desc: "", ref: "MELIPAYMENTS-COLLECTIONAT", monto: 1778368, comision: 0 }, { ...base, id: "otro", desc: "Transferencia", ref: "abc", monto: 4653466, comision: 0 }], "2026-10-10", "2026-10-10");
   assert.equal(r.n, 1);
   assert.equal(r.comision, 100);
 });
@@ -104,4 +105,17 @@ test("Mercado Pago: la app solo puede hacer consultas de lectura", async () => {
   assert.ok(/method: "GET"/.test(src));
   assert.ok(/API \+ "\/oauth\/token", \{ method: "POST"/.test(src));
   assert.equal(typeof mp.fetchPayments, "function");
+});
+
+test("Mercado Pago: cada pedido usa la comisión real de su cobro", () => {
+  const o = order(7, "2026-10-10", 2, 56990);
+  const pay = { id: "p7", desc: "Compra en Impoluto", c: "2026-10-10T15:02:00Z", a: "2026-10-10T15:02:00Z", st: "approved", op: "regular_payment", monto: 56990, comision: 8310.28, retenciones: 584.15, neto: 48095.57, cu: 3 };
+  const [v] = M.vincularPagos([o], [pay]);
+  assert.equal(v._mp.com, 8310.28);
+  assert.equal(M.costoPedido(v, costos, prods).mp, 8310.28);
+  // el resumen no ajusta dos veces: queda la comisión real
+  const r = M.resumen({ orders: [v], ads: [], meta: {}, costos, prods, pays: [pay] }, "2026-10-10", "2026-10-10");
+  assert.ok(Math.abs(r.mp - 8310.28) < 1e-6);
+  const r0 = M.resumen({ orders: [v], ads: [], meta: {}, costos, prods }, "2026-10-10", "2026-10-10");
+  assert.ok(Math.abs(r.ganancia - r0.ganancia) < 1e-6);
 });

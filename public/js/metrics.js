@@ -66,7 +66,8 @@ export function costoPedido(o, cfgIn, prods) {
   const envio = fisico ? n(cfg.envioPedido) : 0;
   const armado = fisico ? n(cfg.armadoPedido) : 0;
   const mpPct = transfer ? 0 : cfg.mpCuotas && units >= n(cfg.mpDesde || 1) ? n(cfg.mpPctCuotas) : n(cfg.mpPctSin);
-  const mp = (venta * mpPct) / 100;
+  // Si el pedido está vinculado a su cobro de Mercado Pago, usamos la comisión real de ese cobro.
+  const mp = o._mp ? n(o._mp.com) : (venta * mpPct) / 100;
   const shopify = (venta * n(cfg.shopifyPct)) / 100;
   const iibb = (venta * n(cfg.iibbPct)) / 100;
   let ivaDebito = 0, ivaCredito = 0, ivaPagar = 0;
@@ -98,9 +99,12 @@ function fijosEnRango(cfg, from, to) {
 // ---------- Mercado Pago ----------
 // Cobros aprobados de ventas (no transferencias entre cuentas ni cargas de saldo).
 // Solo ventas online por Checkout Pro: fuera los cobros en persona (Point, QR, caja) y las transferencias o cargas de saldo.
-// Las ventas de Mercado Libre que entran a la misma cuenta NO son de la tienda: se excluyen siempre.
-export const esMeli = (p) => /MELI|MERCADOLIBRE/i.test(p.mk || "") || /mercadolibre/i.test(p.ot || "");
-export const esCheckoutOnline = (p) => !esMeli(p) && !p.pid && !/POINT|INSTORE|QR|PIX|MONEY_TRANSFER|ACCOUNT_FUND/i.test(p.poi || "");
+// Las ventas y liquidaciones de Mercado Libre que entran a la misma cuenta NO son de la tienda: se excluyen siempre.
+export const esMeli = (p) => /MELI|MERCADOLIBRE/i.test(p.mk || "") || /mercadolibre/i.test(p.ot || "") || /^MELI/i.test(p.ref || "");
+// Un cobro es de la tienda si viene del checkout de Shopify: la descripción dice "Impoluto" (o "Compra en Impoluto")
+// o la referencia es el código de checkout de Shopify (r + 24 letras y números).
+export const esDeLaTienda = (p) => /impoluto/i.test(p.desc || "") || /^r[A-Za-z0-9]{20,}$/.test(p.ref || "");
+export const esCheckoutOnline = (p) => !esMeli(p) && !p.pid && !/POINT|INSTORE|MONEY_TRANSFER|ACCOUNT_FUND/i.test(p.poi || "") && esDeLaTienda(p);
 export const esCobroVenta = (p) => (p.op === "regular_payment" || !p.op) && esCheckoutOnline(p) && (p.st === "approved" || p.st === "refunded" || p.st === "charged_back");
 export function mpCobros(pays, from, to) {
   if (!pays || !pays.length) return null;
@@ -113,6 +117,34 @@ export function mpCobros(pays, from, to) {
     cuotas: l.filter((p) => n(p.cu) > 1).length,
   };
 }
+// % real que cobra Mercado Pago, separado en 1 pago y cuotas (para estimar cada pedido y las ofertas).
+export function mpPctReales(pays, desde) {
+  if (!pays || !pays.length) return null;
+  const l = pays.filter((p) => esCobroVenta(p) && p.st === "approved" && dayOf(p.a || p.c) >= desde);
+  const grupo = (f) => { const g = l.filter(f); const m = sum(g, (p) => n(p.monto)); return { n: g.length, pct: m ? (sum(g, (p) => n(p.comision)) / m) * 100 : null }; };
+  const uno = grupo((p) => n(p.cu) <= 1), cuotas = grupo((p) => n(p.cu) > 1);
+  return l.length ? { uno, cuotas, n: l.length } : null;
+}
+
+// Vincula cada pedido de Shopify con su cobro de Mercado Pago (mismo monto, pocos minutos de diferencia).
+export function vincularPagos(orders, pays) {
+  if (!pays || !pays.length) return orders;
+  const libres = pays.filter((p) => esCobroVenta(p) && p.st === "approved").map((p) => ({ p, t: Date.parse(p.a || p.c), usado: false }));
+  return orders.map((o) => {
+    if (estado(o) !== "pagado" || esTransferencia(o)) return o;
+    const t = Date.parse(o.p || o.c), monto = n(o.tot);
+    let mejor = null, dist = Infinity;
+    for (const x of libres) {
+      if (x.usado || Math.abs(n(x.p.monto) - monto) > 1) continue;
+      const d = Math.abs(x.t - t);
+      if (d < dist && d < 3 * 3600e3) { mejor = x; dist = d; }
+    }
+    if (!mejor) return o;
+    mejor.usado = true;
+    return { ...o, _mp: { id: mejor.p.id, com: n(mejor.p.comision), ret: n(mejor.p.retenciones), neto: n(mejor.p.neto), cu: n(mejor.p.cu), rel: mejor.p.rel } };
+  });
+}
+
 // Plata cobrada que Mercado Pago todavía no liberó.
 export function mpALiberar(pays, ahoraISO = new Date().toISOString()) {
   if (!pays || !pays.length) return null;

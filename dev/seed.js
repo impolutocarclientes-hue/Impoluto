@@ -40,7 +40,7 @@ export async function seed(redis) {
     const comision = Math.round(o.tot * (cuotas ? 0.155 : 0.064));
     const retenciones = Math.round(o.tot * 0.03);
     const rel = new Date(Date.parse(o.c) + (cuotas ? 0 : 14) * 864e5).toISOString();
-    pays["mp" + o.id] = { id: "mp" + o.id, c: o.c, a: o.c, u: o.c, rel, rs: Date.parse(rel) < Date.now() ? "released" : "pending", st: "approved", op: "regular_payment", pm: "visa", pt: "credit_card", cu: cuotas ? 3 : 1, monto: o.tot, neto: o.tot - comision - retenciones, devuelto: 0, comision, retenciones, fees: [], ref: "", desc: "" };
+    pays["mp" + o.id] = { id: "mp" + o.id, c: o.c, a: o.c, u: o.c, rel, rs: Date.parse(rel) < Date.now() ? "released" : "pending", st: "approved", op: "regular_payment", pm: "visa", pt: "credit_card", cu: cuotas ? 3 : 1, monto: o.tot, neto: o.tot - comision - retenciones, devuelto: 0, comision, retenciones, fees: [], ref: "", desc: "Compra en Impoluto" };
   }
   const ads = {};
   const ADS_DEF = [

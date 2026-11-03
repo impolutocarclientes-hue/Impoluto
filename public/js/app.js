@@ -99,6 +99,9 @@ async function api(path, opts) {
 async function loadData() {
   try {
     S.data = await api(`/api/data?from=2020-01-01&to=${M.addDays(today, 1)}`);
+    // Cada pedido con su cobro real de Mercado Pago (comisión exacta en vez del %).
+    S.data.orders = M.vincularPagos(S.data.orders, S.data.pays);
+    S.mpPcts = M.mpPctReales(S.data.pays, M.addDays(today, -60));
     S.loaded = true;
   } catch (e) { if (e.message !== "auth") S.loadErr = e.message; }
   render();
@@ -620,25 +623,36 @@ function viewConfig() {
     h += `</div><p class="note">Se actualiza sola todos los días a las 6 de la mañana y cada vez que abrís la app (si pasó más de una hora).${cn.cron ? "" : " Falta la variable CRON_SECRET en Vercel para la actualización diaria."} <a href="#" data-act="sync-full">Volver a traer los últimos 60 días</a></p>`;
   }
   if (S.cfgSub === "costos") {
-    h += `<div class="card"><h3>Tu dólar</h3><div class="form">${num("dolar", "$", "1", "Dólar para pasar el gasto de Meta y el CPA", '<a href="#" data-act="dolarhoy-cfg">Usar el dólar tarjeta de hoy</a>')}${num("recargoAds", "%", "0.1", "Recargo sobre el gasto en Meta", "Impuestos o percepciones de la tarjeta sobre Meta. 0 si no tenés.")}</div></div>
-    <div class="card"><h3>Lo que te cuesta cada pedido</h3><div class="form">${num("envioPedido", "$", "1", "Envío que pagás vos", "0 si lo paga el cliente.")}${num("armadoPedido", "$", "1", "Armado y caja", "Caja, etiqueta, depósito.")}</div><p class="note" style="margin-top:8px">El costo de cada producto se carga en la pestaña Productos.</p></div>
-    <div class="card"><h3>Lo que se queda cada cobro</h3><div class="form">
-      ${yn("mpCuotas", "¿Ofrecés cuotas sin interés?")}
-      ${num("mpPctCuotas", "%", "0.1", "Mercado Pago con cuotas", "Con 3 cuotas sin interés suele ser 17 %.")}
-      ${num("mpPctSin", "%", "0.1", "Mercado Pago sin cuotas", "Sin cuotas, 7 %. Fijate el tuyo en Mercado Pago › Tu negocio › Costos y cuotas.")}
-      ${(() => { const rr = M.mpCobros(S.data.pays, M.addDays(today, -29), today); return rr && rr.monto ? `<p class="banner info" style="grid-column:1/-1">Con Mercado Pago conectado, el resumen usa la comisión real. En los últimos 30 días fue <b>${pct(rr.pct)}</b> (${int(rr.cuotas)} de ${int(rr.n)} cobros en cuotas). Estos % se siguen usando para las ofertas y la calculadora.</p>` : ""; })()}
-      <label class="f"><span>¿En qué ofertas hay cuotas?</span><div class="seg" style="width:100%">${[[1, "En todas"], [2, "Desde la 2"], [3, "Desde la 3"]].map(([v, l]) => `<button data-costv="mpDesde" data-val="${v}" aria-pressed="${nn(c.mpDesde) === v}">${l}</button>`).join("")}</div></label>
-      ${num("shopifyPct", "%", "0.1", "Shopify", "Lo que se queda por cada venta.")}
-      ${num("iibbPct", "%", "0.1", "Ingresos brutos", "El impuesto de tu provincia por vender.")}
-    </div><p class="note" style="margin-top:8px">Los pedidos pagados por transferencia no pagan Mercado Pago.</p></div>
-    <div class="card"><h3>¿Cómo facturás?</h3><div class="form">
-      <label class="f"><span>Régimen</span><div class="seg" style="width:100%">${[["mono", "Monotributo"], ["ri", "Resp. inscripto"], ["sa", "Sociedad"]].map(([v, l]) => `<button data-costv="regimen" data-val="${v}" aria-pressed="${c.regimen === v}">${l}</button>`).join("")}</div></label>
-      ${num("beneficioIva", "%", "1", "Beneficio del IVA", "Si ya no lo tenés, 0. Pagás el resto del IVA de venta.")}
-      ${yn("provFactura", "¿Tu proveedor te da factura?")}
-      ${yn("armadoFactura", "¿El armado (fulfillment) te da factura?")}
-      ${num("ganPct", "%", "0.5", "Provisión de Ganancias", "Sobre la ganancia, para guardar.")}
-    </div></div>
-    <div class="card"><h3>CPA objetivo por oferta</h3><p class="note">Lo que querés pagarle a Meta por venta en cada oferta (Lauty pide 16, 18 y 20).</p><div class="form" style="margin-top:8px">${[1, 2, 3].map((k) => `<label class="f"><span>Oferta ${k}${k === 3 ? " o más" : ""}</span><div class="prefix w"><em>US$</em><input class="in" type="number" step="0.5" data-cpaobj="${k}" value="${esc(c.cpaObjetivo[k])}"></div></label>`).join("")}</div></div>`;
+    // Estilo ESA: una pregunta por fila, en criollo.
+    const row = (titulo, ayuda, control) => `<div class="qrow"><div><b>${titulo}</b>${ayuda ? `<small>${ayuda}</small>` : ""}</div><div>${control}</div></div>`;
+    const pesos = (k) => `<div class="prefix"><em>$</em><input class="in" type="number" step="1" data-cost="${k}" value="${esc(S.costos[k] ?? c[k] ?? "")}"></div>`;
+    const porc = (k, step = "0.1") => `<div class="prefix"><em>%</em><input class="in" type="number" step="${step}" data-cost="${k}" value="${esc(S.costos[k] ?? c[k] ?? "")}"></div>`;
+    const sino = (k) => `<div class="seg" style="width:100%"><button data-costb="${k}" data-val="1" aria-pressed="${!!c[k]}">Sí</button><button data-costb="${k}" data-val="0" aria-pressed="${!c[k]}">No</button></div>`;
+    const modo = c.mpModo || (c.mpCuotas ? "si" : "no");
+    const real = S.mpPcts;
+    const mpCtrl = real
+      ? `<div class="banner info" style="margin:0"><b>Sale de tus cobros reales</b> (últimos 60 días, ${int(real.n)} cobros).<br>En 1 pago: <b>${real.uno.pct == null ? "–" : pct(real.uno.pct / 100)}</b> · En cuotas: <b>${real.cuotas.pct == null ? "–" : pct(real.cuotas.pct / 100)}</b><br><span class="small">Cada pedido usa la comisión exacta de su cobro.</span></div>`
+      : `<div style="display:grid;gap:8px"><div class="seg" style="width:100%">${[["si", "Sí ≈17 %"], ["no", "No ≈7 %"], ["mio", "Pongo el mío"]].map(([v, l]) => `<button data-mpmodo="${v}" aria-pressed="${modo === v}">${l}</button>`).join("")}</div>
+         ${modo === "mio" ? porc("mpPctSin") : ""}${modo === "si" ? `<div class="seg" style="width:100%">${[[1, "En todas"], [2, "Desde la 2"], [3, "Desde la 3"]].map(([v, l]) => `<button data-costv="mpDesde" data-val="${v}" aria-pressed="${nn(c.mpDesde || 1) === v}">${l}</button>`).join("")}</div>` : ""}</div>`;
+    h += `<div class="card qcard"><h3>Tu dólar</h3>
+      ${row("Dólar", `Para pasar a pesos el gasto de Meta y el CPA. <a href="#" data-act="dolarhoy-cfg">Usar el dólar tarjeta de hoy</a>`, `<div class="prefix"><em>$</em><input class="in" type="number" data-cost="dolar" value="${esc(S.costos.dolar ?? c.dolar)}"></div>`)}</div>
+    <div class="card qcard"><h3>Lo que te cuesta cada pedido</h3>
+      ${row("Envío que pagás vos", "0 si lo paga el cliente.", pesos("envioPedido"))}
+      ${row("Armado y caja", "Caja, etiqueta, depósito.", pesos("armadoPedido"))}
+      <p class="note">El costo de cada producto va en la pestaña <a href="#" data-cfgsub="productos">Productos</a>.</p></div>
+    <div class="card qcard"><h3>Lo que se queda cada cobro</h3>
+      ${row("Mercado Pago", real ? "Conectado: no hace falta cargar nada." : "¿Ofrecés cuotas sin interés? Fijate el tuyo en Mercado Pago › Tu negocio › Costos y cuotas.", mpCtrl)}
+      ${row("Shopify", "Lo que se queda por cada venta.", porc("shopifyPct"))}
+      ${row("Ingresos brutos", "Un impuesto de tu provincia por vender.", porc("iibbPct"))}</div>
+    <div class="card qcard"><h3>¿Cómo facturás?</h3>
+      ${row("Régimen", "", `<div class="seg" style="width:100%">${[["mono", "Monotributo"], ["ri", "Resp. inscripto"], ["sa", "Sociedad"]].map(([v, l]) => `<button data-costv="regimen" data-val="${v}" aria-pressed="${c.regimen === v}">${l}</button>`).join("")}</div>`)}
+      ${c.regimen !== "mono" ? `${row("Beneficio del IVA", "50 el primer año, 30 el segundo, 20 el tercero. Si ya no lo tenés, 0.", porc("beneficioIva", "1"))}
+      ${row("¿Tu proveedor te da factura?", "Réplicas o sin factura: No.", sino("provFactura"))}
+      ${row("¿El armado (fulfillment) te da factura?", "", sino("armadoFactura"))}` : ""}
+      ${row("Guardar para Ganancias", "Un % de lo que ganás, para el impuesto anual.", porc("ganPct", "0.5"))}</div>
+    <div class="card qcard"><h3>Cuánto querés pagarle a Meta por venta</h3>
+      ${[1, 2, 3].map((k) => row(`Oferta ${k}${k === 3 ? " o más" : ""}`, k === 1 ? "Lleva 1 unidad. Lauty pide US$16." : k === 2 ? "Lleva 2. Lauty pide US$18." : "Lleva 3 o más. Lauty pide US$20.", `<div class="prefix w"><em>US$</em><input class="in" type="number" step="0.5" data-cpaobj="${k}" value="${esc(c.cpaObjetivo[k])}"></div>`)).join("")}</div>
+    <div class="card qcard"><h3>Otros</h3>${row("Recargo sobre Meta", "Impuestos de la tarjeta sobre el gasto en anuncios. 0 si no tenés.", porc("recargoAds"))}</div>`;
   }
   if (S.cfgSub === "productos") {
     const ps = productosVistos();
@@ -774,7 +788,7 @@ document.addEventListener("focusout", () => setTimeout(() => { if (S.dirty) rend
 
 // ============ eventos ============
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-fijoadd],[data-fijodel]");
+  const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-mpmodo],[data-fijoadd],[data-fijodel]");
   const cp = e.target.closest("[data-copy]");
   if (cp) { e.preventDefault(); navigator.clipboard.writeText(cp.dataset.copy).then(() => toast("Copiado"), () => toast("No se pudo copiar")); return; }
   if (!t) return;
@@ -793,6 +807,7 @@ document.addEventListener("click", async (e) => {
   if (d.calcreg) { S.calcReg = d.calcreg; return render(); }
   if (d.calcb) { setCalc(d.calcb, d.val === "1"); return; }
   if (d.costb) { saveCostos({ [d.costb]: d.val === "1" }); return render(); }
+  if (d.mpmodo) { const v = d.mpmodo; saveCostos(v === "si" ? { mpModo: v, mpCuotas: true, mpPctCuotas: 17, mpPctSin: 7 } : v === "no" ? { mpModo: v, mpCuotas: false, mpPctSin: 7 } : { mpModo: v, mpCuotas: false }); return render(); }
   if (d.costv) { saveCostos({ [d.costv]: isNaN(Number(d.val)) ? d.val : Number(d.val) }); return render(); }
   if (d.fijoadd !== undefined) { saveCostos({ fijos: [...(cfg().fijos || []), { nombre: d.fijoadd || "Otro", monto: 0 }] }); return render(); }
   if (d.fijodel !== undefined) { const f = [...(cfg().fijos || [])]; f.splice(Number(d.fijodel), 1); saveCostos({ fijos: f }); return render(); }
