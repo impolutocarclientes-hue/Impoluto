@@ -736,7 +736,11 @@ function render() {
   $("#topr").innerHTML = topRight();
   const V = { dashboard: viewDashboard, anuncios: viewAnuncios, caja: viewCaja, impuestos: viewImpuestos, socios: viewSocios, gastos: viewGastos, calculadora: viewCalc, config: viewConfig };
   $("#title").textContent = (VIEWS.find((v) => v[0] === S.view) || VIEWS[0])[1];
+  // Lo que el usuario está escribiendo en un formulario no se borra cuando la pantalla se actualiza sola.
+  const kept = {};
+  document.querySelectorAll("#view input[id], #modal input[id]").forEach((i) => { if (i.type !== "checkbox" && i.value) kept[i.id] = i.value; });
   try { $("#view").innerHTML = (V[S.view] || viewDashboard)(); } catch (e) { console.error(e); $("#view").innerHTML = `<div class="content"><p class="banner bad">Algo falló al armar esta pantalla: ${esc(e.message)}</p></div>`; }
+  for (const [id, v] of Object.entries(kept)) { const el = document.getElementById(id); if (el && el.closest("#view") && el.value !== v && !el.readOnly) el.value = v; }
   window.scrollTo(0, scroll);
 }
 document.addEventListener("focusout", () => setTimeout(() => { if (S.dirty) render(); }, 0));
