@@ -3,9 +3,13 @@
 const API = "https://api.mercadopago.com";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Candado: con Mercado Pago la app SOLO puede leer. Las únicas rutas permitidas son estas consultas (GET).
+// Cualquier otra (cobrar, devolver, cancelar, tarjetas, configuración) se bloquea antes de salir.
+const RUTAS_LECTURA = [/^\/users\/me$/, /^\/v1\/payments\/search\?/];
 async function get(token, path) {
+  if (!RUTAS_LECTURA.some((re) => re.test(path))) throw new Error("Bloqueado: la app solo puede consultar cobros en Mercado Pago.");
   for (let i = 0; i < 4; i++) {
-    const r = await fetch(API + path, { headers: { Authorization: "Bearer " + token } });
+    const r = await fetch(API + path, { method: "GET", headers: { Authorization: "Bearer " + token } });
     if (r.status === 429) { await sleep(1500 * (i + 1)); continue; }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 || r.status === 403) throw new Error("Mercado Pago no aceptó el Access Token. Fijate que sea el de producción (empieza con APP_USR-).");

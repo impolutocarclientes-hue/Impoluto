@@ -94,3 +94,14 @@ test("Mercado Pago: solo cuenta ventas online de Checkout Pro", () => {
   assert.equal(r.n, 1);
   assert.equal(r.comision, 100);
 });
+
+test("Mercado Pago: la app solo puede hacer consultas de lectura", async () => {
+  const mp = await import("../api/_mp.js");
+  const src = (await import("node:fs")).readFileSync(new URL("../api/_mp.js", import.meta.url), "utf8");
+  // Las únicas llamadas a la API: GET de consulta y el pedido de token (POST /oauth/token)
+  const fetches = src.match(/fetch\([^)]*\)/g) || [];
+  assert.equal(fetches.length, 2);
+  assert.ok(/method: "GET"/.test(src));
+  assert.ok(/API \+ "\/oauth\/token", \{ method: "POST"/.test(src));
+  assert.equal(typeof mp.fetchPayments, "function");
+});
