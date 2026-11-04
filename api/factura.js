@@ -144,7 +144,7 @@ export default async function handler(req, res) {
       const sigue = arca && arca.cert && arca.cuit === cuit;
       arca = sigue
         ? { ...arca, pendKey: key, csr }
-        : { cuit, entorno: b.entorno === "homo" ? "homo" : "prod", pendKey: key, csr, alicuota: arca && arca.alicuota, emisor: (arca && arca.emisor) || {}, desde: arca && arca.desde, ptoVta: arca && arca.cuit === cuit ? arca.ptoVta : null };
+        : { cuit, entorno: b.entorno === "homo" ? "homo" : "prod", pendKey: key, csr, alicuota: (arca && arca.alicuota) || "21", emisor: (arca && arca.emisor) || {}, desde: arca && arca.desde, ptoVta: arca && arca.cuit === cuit ? arca.ptoVta : null };
       await guardarArca(arca);
       return res.status(200).json({ ok: true, csr });
     }

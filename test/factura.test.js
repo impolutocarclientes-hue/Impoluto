@@ -94,7 +94,8 @@ test("CUIT y montos de factura B", () => {
   assert.deepEqual(A.montos(56990, 21), { total: 56990, neto: 47099.17, iva: 9890.83 });
 });
 
-test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async () => {
+test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t) => {
+  t.after(() => srv.close());
   await redis.hset(ORDERS, {
     "1001": JSON.stringify(order("1001", 42990)), "1002": JSON.stringify(order("1002", 56990)), "1003": JSON.stringify(order("1003", 67990)),
     "1004": JSON.stringify(order("1004", 42990, { f: "PENDING" })), "1005": JSON.stringify(order("1005", 42990, { x: hoy + "T16:00:00Z" })),
@@ -128,6 +129,9 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async () 
   assert.equal(r.status, 400);
   assert.match(r.body.error, /punto de venta/);
   await call("POST", { action: "config", ptoVta: 3 });
+  r = await call("POST", { action: "emitir", ids: ["1001"] });
+  assert.match(r.body.error, /tus datos/); // la alícuota ya viene en 21 %
+  await call("POST", { action: "config", alicuota: null });
   r = await call("POST", { action: "emitir", ids: ["1001"] });
   assert.match(r.body.error, /alícuota/);
   await call("POST", { action: "config", alicuota: "21", emisor: { razon: "Juan Prueba", domicilio: "Calle 123, Lomas de Zamora", inicio: "01/03/2026" } });
@@ -166,5 +170,4 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async () 
   r = await call("GET", null, { pdf: "1002" });
   assert.equal(r.headers["Content-Type"], "application/pdf");
   assert.equal(r.body.slice(0, 5).toString(), "%PDF-");
-  srv.close();
 });
