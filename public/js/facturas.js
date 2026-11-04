@@ -1,6 +1,6 @@
 // Pantalla «Facturación»: conectar ARCA, revisar los pedidos pagados y emitir las facturas B cuando el usuario lo pide.
 let H = null; // helpers de app.js: { api, toast, render, esc, money }
-const F = { data: null, loading: false, sel: new Set(), confirm: false, emitiendo: false, csr: null, puntos: null, edit: false, err: null };
+const F = { data: null, loading: false, sel: new Set(), confirm: false, emitiendo: false, csr: null, puntos: null, edit: false, err: null, anular: null, anulando: false, libroMes: null };
 
 export function initFacturas(helpers) { H = helpers; }
 export async function cargarFacturas(force) {
@@ -13,6 +13,8 @@ export async function cargarFacturas(force) {
 const fecha = (iso) => new Date(iso).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
 const fch = (s) => (s ? `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)}` : "");
 const nro = (f) => `${String(f.pto).padStart(5, "0")}-${String(f.nro).padStart(8, "0")}`;
+const esNC = (f) => f.tipo === 8;
+const nombre = (f) => (esNC(f) ? "NC B " : "Factura B ") + nro(f);
 
 function pasos(d) {
   const { esc } = H;
@@ -80,10 +82,15 @@ export function viewFacturas() {
   const fact = d.pendientes.filter((p) => !p.motivo), noFact = d.pendientes.filter((p) => p.motivo);
   [...F.sel].forEach((id) => { if (!fact.some((p) => p.id === id)) F.sel.delete(id); });
   const selTot = fact.filter((p) => F.sel.has(p.id)).reduce((s, p) => s + p.total, 0);
-  const revisar = d.facturas.filter((f) => f.estado !== "emitida");
+  const revisar = d.facturas.filter((f) => f.estado === "enviando" || f.estado === "revisar");
 
   if (!listo) h += `<p class="banner warn">Antes de emitir: ${[!a.ptoVta && "elegí el punto de venta", !a.alicuota && "definí el IVA con tu contador", !(a.emisor && a.emisor.razon && a.emisor.domicilio && a.emisor.inicio) && "completá tus datos"].filter(Boolean).join(", ")}.</p>`;
-  revisar.forEach((f) => (h += `<p class="banner bad">La factura ${esc(nro(f))} del pedido ${esc(f.pedido)} quedó a medio emitir. ${esc(f.aviso || "")} La próxima vez que emitas se revisa sola en ARCA.</p>`));
+  revisar.forEach((f) => (h += `<p class="banner bad">La ${esNC(f) ? "nota de crédito" : "factura"} ${esc(nro(f))} del pedido ${esc(f.pedido)} quedó a medio emitir. ${esc(f.aviso || "")} La próxima vez que emitas se revisa sola en ARCA.</p>`));
+
+  // Facturas de pedidos que después se cancelaron o devolvieron
+  if (d.aAnular && d.aAnular.length) {
+    h += `<p class="banner warn"><b>${d.aAnular.length === 1 ? "Hay un pedido facturado que" : "Hay " + d.aAnular.length + " pedidos facturados que"} después se canceló o devolvió.</b> Necesita${d.aAnular.length === 1 ? "" : "n"} nota de crédito: ${d.aAnular.map((x) => `${esc(x.pedido)} (${esc(x.motivo.charAt(0).toLowerCase() + x.motivo.slice(1))}, factura ${esc(nro(x))})`).join(" · ")}. Usá «Anular» en la lista de abajo.</p>`;
+  }
 
   // Para facturar
   h += `<section class="block"><div class="bh"><h2>Para facturar</h2><span class="note">${fact.length} pedidos pagados desde el ${esc(new Date(d.desde + "T12:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "short" }))}</span></div>`;
@@ -97,12 +104,26 @@ export function viewFacturas() {
   if (noFact.length) h += `<p class="note">No se pueden facturar todavía: ${noFact.map((p) => `${esc(p.n)} (${esc(p.motivo)})`).join(" · ")}</p>`;
   h += `</section>`;
 
-  // Emitidas
-  const em = d.facturas.filter((f) => f.estado === "emitida");
-  h += `<section class="block"><div class="bh"><h2>Facturas emitidas</h2><span class="note">${em.length}</span></div>`;
-  h += em.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Factura</th><th>Pedido</th><th>Fecha</th><th class="r">Total</th><th>CAE</th><th></th></tr></thead><tbody>
-    ${em.slice(0, 200).map((f) => `<tr><td>B ${esc(nro(f))}</td><td>${esc(f.pedido)}</td><td>${esc(fch(f.fecha))}</td><td class="r">${money(f.total)}</td><td><code>${esc(f.cae)}</code></td>
-      <td class="r" style="white-space:nowrap"><a class="ctl" href="/api/factura?pdf=${encodeURIComponent(f.orderId)}" target="_blank" rel="noopener" style="text-decoration:none">PDF</a> ${d.mail ? `<button class="ctl" data-fact="email" data-id="${esc(f.orderId)}">${f.emailAt ? "Reenviar" : "Mandar"}</button>` : ""}</td></tr>`).join("")}</tbody></table></div>` : `<div class="card empty">Todavía no emitiste facturas.</div>`;
+  // Comprobantes emitidos (facturas, anuladas y notas de crédito)
+  const em = d.facturas.filter((f) => f.estado === "emitida" || f.estado === "anulada");
+  const aAnularIds = new Set((d.aAnular || []).map((x) => x.orderId));
+  const acciones = (f) => {
+    const pdf = `<a class="ctl" href="/api/factura?pdf=${encodeURIComponent(f.clave)}" target="_blank" rel="noopener" style="text-decoration:none">PDF</a>`;
+    if (esNC(f) || f.estado !== "emitida") return pdf;
+    const mail = d.mail ? ` <button class="ctl" data-fact="email" data-id="${esc(f.clave)}">${f.emailAt ? "Reenviar" : "Mandar"}</button>` : "";
+    const an = F.anular === f.clave
+      ? ` <button class="ctl pri" data-fact="anular-ok" data-id="${esc(f.clave)}" ${F.anulando ? "disabled" : ""}>${F.anulando ? "Emitiendo…" : "Sí, nota de crédito por " + money(f.total)}</button> <button class="ctl" data-fact="anular-no">No</button>`
+      : ` <button class="ctl" data-fact="anular" data-id="${esc(f.clave)}">${aAnularIds.has(f.orderId) ? "⚠ Anular" : "Anular"}</button>`;
+    return pdf + mail + an;
+  };
+  const estadoTxt = (f) => (esNC(f) ? `Anula la ${f.asociado ? "B " + nro(f.asociado) : "factura"}` : f.estado === "anulada" ? `<span class="down">Anulada</span>` : "");
+  const meses = [...new Set(em.map((f) => f.fecha.slice(0, 6)))].sort().reverse();
+  if (!F.libroMes || !meses.includes(F.libroMes)) F.libroMes = meses[0] || null;
+  h += `<section class="block"><div class="bh"><h2>Comprobantes emitidos</h2>${meses.length ? `<div class="actions"><select class="in" data-fact-mes>${meses.map((m) => `<option value="${m}" ${m === F.libroMes ? "selected" : ""}>${m.slice(4, 6)}/${m.slice(0, 4)}</option>`).join("")}</select><button class="ctl" data-fact="libro">Libro IVA Ventas (Excel)</button></div>` : ""}</div>`;
+  h += em.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Comprobante</th><th>Pedido</th><th>Fecha</th><th class="r">Total</th><th>Estado</th><th>CAE</th><th></th></tr></thead><tbody>
+    ${em.slice(0, 300).map((f) => `<tr><td>${esc(nombre(f))}</td><td>${esc(f.pedido)}</td><td>${esc(fch(f.fecha))}</td><td class="r">${esNC(f) ? "−" : ""}${money(f.total)}</td><td>${estadoTxt(f)}</td><td><code>${esc(f.cae)}</code></td>
+      <td class="r" style="white-space:nowrap">${acciones(f)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="note">«Anular» hace una nota de crédito por el total en ARCA: sirve para una factura mal hecha o una devolución. Si el pedido sigue pagado, vuelve a aparecer en «Para facturar».</p>` : `<div class="card empty">Todavía no emitiste comprobantes.</div>`;
   h += `</section>`;
   h += mailCard(d) + ajustes(d);
   return h + "</div>";
@@ -152,16 +173,47 @@ export async function onFactClick(e) {
       ok.forEach((x) => F.sel.delete(x.id));
       toast(`${ok.length} factura${ok.length === 1 ? "" : "s"} emitida${ok.length === 1 ? "" : "s"}${mal.length ? ` · ${mal.length} con error: ${mal[0].error}` : ""}${mailMal.length ? ` · email: ${mailMal[0].mail}` : ""}`);
       F.emitiendo = false; F.confirm = false; await cargarFacturas(true);
-    } else if (act === "email") {
+    } else if (act === "anular") { F.anular = t.dataset.id; render(); }
+    else if (act === "anular-no") { F.anular = null; render(); }
+    else if (act === "anular-ok") {
+      F.anulando = true; render();
+      const f = F.data.facturas.find((x) => x.clave === t.dataset.id);
+      const r = await post({ action: "anular", id: f.orderId });
+      F.anular = null; F.anulando = false;
+      toast(`Nota de crédito ${nro(r.nc)} emitida: la factura ${nro(f)} quedó anulada`);
+      await cargarFacturas(true);
+    } else if (act === "libro") libroIva();
+    else if (act === "email") {
       t.disabled = true; t.textContent = "Mandando…";
       await post({ action: "email", id: t.dataset.id }); toast("Factura enviada"); await cargarFacturas(true);
     }
-  } catch (err) { F.emitiendo = false; F.confirm = false; toast(err.message || String(err)); render(); }
+  } catch (err) { F.emitiendo = false; F.confirm = false; F.anulando = false; F.anular = null; toast(err.message || String(err)); await cargarFacturas(true); }
   return true;
 }
 
 // Archivo .crt arrastrado o elegido → al cuadro de texto.
 export function onFactChange(e) {
+  if (e.target.matches && e.target.matches("[data-fact-mes]")) { F.libroMes = e.target.value; return true; }
   if (e.target.id === "fa-crt-file" && e.target.files[0]) { e.target.files[0].text().then((txt) => { document.getElementById("fa-crt").value = txt; }); return true; }
   return false;
+}
+
+// Libro IVA Ventas del mes: facturas (también las anuladas, porque se emitieron) y notas de crédito en negativo.
+function libroIva() {
+  const mes = F.libroMes;
+  const fil = F.data.facturas.filter((f) => (f.estado === "emitida" || f.estado === "anulada") && f.fecha.startsWith(mes)).sort((a, b) => a.fecha.localeCompare(b.fecha) || (a.tipo - b.tipo) || (a.nro - b.nro));
+  const n2 = (v) => String(Math.round(Number(v || 0) * 100) / 100).replace(".", ",");
+  const rows = [["Fecha", "Tipo", "Punto de venta", "Número", "CAE", "Cliente", "Pedido", "Alícuota IVA", "Neto gravado", "IVA", "Total", "Comprobante asociado"]];
+  let tn = 0, ti = 0, tt = 0;
+  for (const f of fil) {
+    const sg = esNC(f) ? -1 : 1;
+    tn += sg * f.neto; ti += sg * f.iva; tt += sg * f.total;
+    rows.push([fch(f.fecha), esNC(f) ? "Nota de crédito B" : "Factura B", String(f.pto).padStart(5, "0"), String(f.nro).padStart(8, "0"), f.cae, "Consumidor final", f.pedido, String(f.alicuota).replace(".", ",") + " %", n2(sg * f.neto), n2(sg * f.iva), n2(sg * f.total), f.asociado ? "Factura B " + nro(f.asociado) : ""]);
+  }
+  rows.push(["", "", "", "", "", "", "TOTAL", "", n2(tn), n2(ti), n2(tt), ""]);
+  const csv = "\ufeff" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  a.download = `libro-iva-ventas-impoluto-${mes.slice(0, 4)}-${mes.slice(4, 6)}.csv`;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }

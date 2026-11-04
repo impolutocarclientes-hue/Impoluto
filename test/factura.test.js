@@ -32,7 +32,7 @@ process.env.KV_REST_API_TOKEN = "t";
 process.env.APP_PASSWORD = "clave-test";
 
 // ---- ARCA falso ----
-const arcaFake = { last: 41, comps: {}, cortar: false, lento: null, consultaFalla: false, logins: 0, cmsOk: false };
+const arcaFake = { last: 41, lastNC: 0, comps: {}, ncs: {}, ncBody: null, cortar: false, lento: null, consultaFalla: false, logins: 0, cmsOk: false };
 // ---- Shopify falso: el pedido "de verdad" en este momento ----
 const shopOrders = {};
 const raw = (o) => ({ id: "gid://shopify/Order/" + o.id, name: o.n, createdAt: o.c, processedAt: o.c, updatedAt: o.c, cancelledAt: o.x, test: o.t, displayFinancialStatus: o.f, paymentGatewayNames: ["mercado_pago"], sourceName: o.s,
@@ -62,12 +62,22 @@ globalThis.fetch = async (url, opts = {}) => {
   const action = String(opts.headers.SOAPAction).split("/").pop();
   assert.match(body, /<Token>TOK<\/Token><Sign>SIG<\/Sign><Cuit>20111111112<\/Cuit>/);
   if (action === "FEParamGetPtosVenta") return xml(`<R><ResultGet><PtoVenta><Nro>3</Nro><EmisionTipo>CAE</EmisionTipo><Bloqueado>N</Bloqueado><FchBaja>NULL</FchBaja></PtoVenta></ResultGet></R>`);
-  if (action === "FECompUltimoAutorizado") return xml(`<R><CbteNro>${arcaFake.last}</CbteNro></R>`);
+  if (action === "FECompUltimoAutorizado") return xml(`<R><CbteNro>${tagv(body, "CbteTipo") === "8" ? arcaFake.lastNC : arcaFake.last}</CbteNro></R>`);
   if (action === "FECompConsultar") {
     if (arcaFake.consultaFalla) return xml(`<R><Errors><Err><Code>500</Code><Msg>Error interno de aplicacion</Msg></Err></Errors></R>`);
-    const c = arcaFake.comps[tagv(body, "CbteNro")];
+    const c = (tagv(body, "CbteTipo") === "8" ? arcaFake.ncs : arcaFake.comps)[tagv(body, "CbteNro")];
     // Como ARCA real: FchVtoPago vacío ANTES de FchVto
     return xml(c ? `<R><ResultGet><CbteFch>${c.fecha}</CbteFch><FchVtoPago /><ImpTotal>${c.total}</ImpTotal><MonId>PES</MonId><CodAutorizacion>${c.cae}</CodAutorizacion><FchVto>20261120</FchVto><Resultado>A</Resultado></ResultGet></R>` : `<R><Errors><Err><Code>602</Code><Msg>Sin resultados</Msg></Err></Errors></R>`);
+  }
+  if (action === "FECAESolicitar" && tagv(body, "CbteTipo") === "8") {
+    const nro = Number(tagv(body, "CbteDesde"));
+    arcaFake.ncBody = body;
+    if (nro !== arcaFake.lastNC + 1) return xml(`<R><FECAEDetResponse><Resultado>R</Resultado></FECAEDetResponse><Errors><Err><Code>10016</Code><Msg>No correlativo</Msg></Err></Errors></R>`);
+    const asoc = Number(tagv(tagv(body, "CbteAsoc") || "", "Nro"));
+    if (!arcaFake.comps[asoc]) return xml(`<R><FECAEDetResponse><Resultado>R</Resultado></FECAEDetResponse><Errors><Err><Code>10197</Code><Msg>Comprobante asociado inexistente</Msg></Err></Errors></R>`);
+    arcaFake.lastNC = nro;
+    arcaFake.ncs[nro] = { total: Number(tagv(body, "ImpTotal")), fecha: tagv(body, "CbteFch"), cae: "8" + String(nro).padStart(13, "0") };
+    return xml(`<R><FECAEDetResponse><Resultado>A</Resultado><CAE>${arcaFake.ncs[nro].cae}</CAE><CAEFchVto>20261120</CAEFchVto></FECAEDetResponse></R>`);
   }
   if (action === "FECAESolicitar") {
     const nro = Number(tagv(body, "CbteDesde"));
@@ -158,7 +168,10 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
   r = await call("POST", { action: "config", ptoVta: 3 });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /otro sistema/);
-  arcaFake.last = 0;
+  arcaFake.last = 0; arcaFake.lastNC = 7;
+  r = await call("POST", { action: "config", ptoVta: 3 });
+  assert.match(r.body.error, /notas de crédito de otro sistema/);
+  arcaFake.lastNC = 0;
   r = await call("POST", { action: "config", ptoVta: 3 });
   assert.equal(r.status, 200);
   r = await call("POST", { action: "emitir", ids: ["1001"] });
@@ -257,6 +270,31 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
 
   // 7) El login a ARCA se reutiliza (ARCA no da otro mientras el anterior sigue vigente)
   assert.equal(arcaFake.logins, 1);
+
+  // 9) Nota de crédito: anula la factura del pedido 1002, el pedido vuelve a «Para facturar»
+  r = await call("POST", { action: "anular", id: "1002" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.nc.tipo, 8); assert.equal(r.body.nc.nro, 1); assert.equal(r.body.nc.total, 56990);
+  assert.match(arcaFake.ncBody, /<CbtesAsoc><CbteAsoc><Tipo>6<\/Tipo><PtoVta>3<\/PtoVta><Nro>2<\/Nro>/);
+  r = await call("GET");
+  const anul = r.body.facturas.find((f) => f.clave === "anulada:1002:2");
+  assert.equal(anul.estado, "anulada"); assert.equal(anul.anuladaPor.nro, 1);
+  assert.ok(r.body.pendientes.some((p) => p.id === "1002"), "el pedido vuelve a estar para facturar");
+  // Anular de nuevo: ya no hay factura vigente, no sale otra nota de crédito
+  r = await call("POST", { action: "anular", id: "1002" });
+  assert.equal(r.status, 400); assert.equal(arcaFake.lastNC, 1);
+  // Se refactura: número siguiente, sin chocar con la anulada
+  r = await call("POST", { action: "emitir", ids: ["1002"] });
+  assert.equal(r.body.resultados[0].ok, true, JSON.stringify(r.body)); assert.equal(r.body.resultados[0].f.nro, 6);
+  // Pedido facturado que después se canceló: aparece para anular
+  await redis.hset(ORDERS, { "1001": JSON.stringify(order("1001", 42990, { x: hoy + "T20:00:00Z" })) });
+  r = await call("GET");
+  assert.deepEqual(r.body.aAnular.map((x) => x.orderId), ["1001"]);
+  // Un email de una nota de crédito o de una factura anulada no pisa nada
+  r = await call("POST", { action: "email", id: "nc:1002:2" });
+  assert.equal(r.status, 400);
+  r = await call("GET", null, { pdf: "nc:1002:2" });
+  assert.equal(r.body.slice(0, 5).toString(), "%PDF-");
 
   // 8) PDF
   r = await call("GET", null, { pdf: "1002" });

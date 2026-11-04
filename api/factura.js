@@ -1,7 +1,7 @@
 // Facturador: arma las facturas B de los pedidos pagados de Shopify y las emite en ARCA cuando el usuario toca «Emitir».
 // Nunca factura solo: cada emisión la pide el usuario desde la app.
 import { redis, SECRETS, ORDERS, isAuthed, deny, setupError, readJson, getSecrets, safeParse } from "./_lib.js";
-import { nuevaClave, certCorresponde, cuitValido, puntosDeVenta, ultimoNumero, consultar, solicitarCae, montos, ALICUOTAS, FACTURA_B } from "./_arca.js";
+import { nuevaClave, certCorresponde, cuitValido, puntosDeVenta, ultimoNumero, consultar, solicitarCae, montos, ALICUOTAS, FACTURA_B, NC_B } from "./_arca.js";
 import { facturaPdf, numeroFactura } from "./_pdf.js";
 import { contactoPedido, fetchOrder } from "./_shopify.js";
 
@@ -27,7 +27,20 @@ const guardarFactura = (arca, oid, f) => redis.hset(factKey(arca), { [oid]: JSON
 const publico = (a) => a ? { cuit: a.cuit, entorno: a.entorno || "prod", tieneClave: !!(a.key || a.pendKey), csr: a.csr || null, conectado: !!(a.cert && a.key), vence: a.vence || null, ptoVta: a.ptoVta || null, alicuota: a.alicuota || null, desde: a.desde || null, emisor: a.emisor || {} } : null;
 const pendientesDe = (facturas) => Object.values(facturas).filter((f) => f.estado === "enviando" || f.estado === "revisar");
 // El número más alto que emitió ESTA app (Factura B) en ese punto de venta.
-const maxPropio = (facturas, pto) => Math.max(0, ...Object.values(facturas).filter((f) => f.pto === pto && (f.tipo || FACTURA_B) === FACTURA_B).map((f) => Number(f.nro) || 0));
+const maxPropio = (facturas, pto, tipo = FACTURA_B) => Math.max(0, ...Object.values(facturas).filter((f) => f.pto === pto && (f.tipo || FACTURA_B) === tipo).map((f) => Number(f.nro) || 0));
+const nombreTipo = (t) => (t === NC_B ? "nota de crédito" : "factura");
+// Claves del registro: la factura vigente de un pedido va con el id del pedido; las notas de crédito y las facturas anuladas, aparte.
+const claveNC = (f) => `nc:${f.orderId}:${f.nro}`;
+const claveAnulada = (f) => `anulada:${f.orderId}:${f.nro}`;
+
+// Una nota de crédito emitida anula su factura: la factura pasa a «anulada» y el pedido se puede volver a facturar si sigue pagado.
+async function finalizarNC(arca, facturas, nc) {
+  const f = facturas[nc.orderId];
+  if (!f || f.tipo === NC_B || f.nro !== nc.asociado.nro || f.pto !== nc.asociado.pto) return;
+  const an = { ...f, estado: "anulada", anuladaPor: { pto: nc.pto, nro: nc.nro, fecha: nc.fecha, cae: nc.cae } };
+  await guardarFactura(arca, claveAnulada(f), an); facturas[claveAnulada(f)] = an;
+  await redis.hdel(factKey(arca), nc.orderId); delete facturas[nc.orderId];
+}
 
 // ¿Se puede facturar este pedido? Devuelve el motivo si no.
 export function motivoNoFacturable(o) {
@@ -58,6 +71,8 @@ async function guardarArca(arca) { await redis.hset(SECRETS, { arca: JSON.string
 // Una factura que quedó a medio emitir (se cortó la conexión) se averigua en ARCA, en SU punto de venta.
 // Solo se borra el registro si ARCA dice que ese número no existe Y todavía no llegó a ese número.
 async function resolverPendientes(arca, facturas) {
+  // Si se cortó justo después de guardar una nota de crédito, se termina de anular su factura.
+  for (const nc of Object.values(facturas).filter((x) => x.tipo === NC_B && x.estado === "emitida")) await finalizarNC(arca, facturas, nc);
   for (const [oid, f] of Object.entries(facturas)) {
     if (f.estado !== "enviando" && f.estado !== "revisar") continue;
     const cfg = { ...arca, ptoVta: f.pto };
@@ -65,6 +80,7 @@ async function resolverPendientes(arca, facturas) {
     if (c.existe && Math.abs(c.total - f.total) < 0.01) {
       const ok = { ...f, ...montos(f.total, f.alicuota), estado: "emitida", cae: c.cae, vto: c.vto, fecha: c.fecha || f.fecha, aviso: undefined };
       await guardarFactura(arca, oid, ok); facturas[oid] = ok;
+      if (ok.tipo === NC_B) await finalizarNC(arca, facturas, ok);
       continue;
     }
     if (c.existe) {
@@ -76,7 +92,7 @@ async function resolverPendientes(arca, facturas) {
     if (ultimo < f.nro) {
       // ARCA puede seguir procesando un pedido que no contestó a tiempo: antes de darla por no emitida se espera.
       const edad = Date.now() - Date.parse(f.sentAt || 0);
-      if (!(edad > ESPERA_MS)) throw new Error(`La factura del pedido ${f.pedido} quedó a medio emitir hace un momento. Esperá ${Math.ceil((ESPERA_MS - (edad || 0)) / 60000)} minutos y tocá Emitir de nuevo: la app confirma en ARCA si salió antes de seguir.`);
+      if (!(edad > ESPERA_MS)) throw new Error(`La ${nombreTipo(f.tipo)} del pedido ${f.pedido} quedó a medio emitir hace un momento. Esperá ${Math.ceil((ESPERA_MS - (edad || 0)) / 60000)} minutos y tocá Emitir de nuevo: la app confirma en ARCA si salió antes de seguir.`);
       await redis.hdel(factKey(arca), oid); delete facturas[oid]; continue;
     }
     const r = { ...f, estado: "revisar", aviso: `ARCA ya pasó el número ${numeroFactura(f)} pero no lo encuentra. Revisalo en ARCA antes de seguir.` };
@@ -85,43 +101,67 @@ async function resolverPendientes(arca, facturas) {
   }
 }
 
-async function emitirUno(arca, o, facturas) {
-  const ultimo = await ultimoNumero(arca, FACTURA_B);
-  const propio = maxPropio(facturas, arca.ptoVta);
-  if (ultimo !== propio) throw new Error(`En el punto de venta ${arca.ptoVta} facturó otro sistema (ARCA va por el ${ultimo}, la app por el ${propio}). No se emite nada para no mezclar con Mercado Libre: usá un punto de venta solo para esta app.`);
+// Pide el CAE de un comprobante (factura o nota de crédito) con todos los controles: punto de venta propio,
+// registro previo, consulta si se corta, y nunca se borra sin certeza.
+async function emitirComp(arca, facturas, clave, datos) {
+  const tipo = datos.tipo;
+  const ultimo = await ultimoNumero(arca, tipo);
+  const propio = maxPropio(facturas, arca.ptoVta, tipo);
+  if (ultimo !== propio) throw new Error(`En el punto de venta ${arca.ptoVta} emitió otro sistema (ARCA va por el ${ultimo}, la app por el ${propio}). No se emite nada para no mezclar con Mercado Libre: usá un punto de venta solo para esta app.`);
   const nro = ultimo + 1;
-  const total = Number(o.cur != null ? o.cur : o.tot);
-  const base = { tipo: FACTURA_B, pto: arca.ptoVta, nro, fecha: yyyymmdd(hoyAR()), pedido: o.n, orderId: o.id, alicuota: arca.alicuota, items: itemsDe(o), envio: Number(o.ship) || 0, entorno: arca.entorno || "prod", cuit: arca.cuit, ...montos(total, arca.alicuota) };
+  const total = datos.total;
+  const base = { ...datos, pto: arca.ptoVta, nro, fecha: yyyymmdd(hoyAR()), alicuota: arca.alicuota, entorno: arca.entorno || "prod", cuit: arca.cuit, ...montos(total, arca.alicuota) };
   // Se anota ANTES de pedir el CAE: si se corta, la próxima vez se consulta en ARCA y no se duplica.
   base.sentAt = new Date().toISOString();
-  await guardarFactura(arca, o.id, { ...base, estado: "enviando" });
-  facturas[o.id] = { ...base, estado: "enviando" };
+  await guardarFactura(arca, clave, { ...base, estado: "enviando" });
+  facturas[clave] = { ...base, estado: "enviando" };
   let r;
   try {
-    r = await solicitarCae(arca, { nro, fecha: base.fecha, total, alicuota: arca.alicuota });
+    r = await solicitarCae(arca, { nro, fecha: base.fecha, total, alicuota: arca.alicuota, tipo, asociado: datos.asociado || null });
   } catch (e) {
-    // Sin respuesta clara de ARCA: nunca se borra. Si la factura salió, se guarda; si no se sabe, queda «revisar».
-    const c = await consultar(arca, nro).catch(() => null);
+    // Sin respuesta clara de ARCA: nunca se borra. Si salió, se guarda; si no se sabe, queda «revisar».
+    const c = await consultar(arca, nro, tipo).catch(() => null);
     if (c && c.existe && Math.abs(c.total - total) < 0.01) r = { ok: true, cae: c.cae, vto: c.vto, ...montos(total, arca.alicuota) };
     else {
       const rev = { ...base, estado: "revisar", aviso: "Se cortó la comunicación con ARCA: " + e.message };
-      await guardarFactura(arca, o.id, rev); facturas[o.id] = rev;
+      await guardarFactura(arca, clave, rev); facturas[clave] = rev;
       throw new Error(rev.aviso + ". No se emite nada más hasta confirmar en ARCA si salió (se revisa sola en la próxima emisión).");
     }
   }
   if (!r.ok) {
-    if (r.resultado === "R") { await redis.hdel(factKey(arca), o.id); delete facturas[o.id]; throw new Error("ARCA rechazó la factura: " + ([...(r.errs || []), ...(r.obs || [])].join(" · ") || "sin detalle")); }
+    if (r.resultado === "R") { await redis.hdel(factKey(arca), clave); delete facturas[clave]; throw new Error(`ARCA rechazó la ${nombreTipo(tipo)}: ` + ([...(r.errs || []), ...(r.obs || [])].join(" · ") || "sin detalle")); }
     const rev = { ...base, estado: "revisar", aviso: "Respuesta de ARCA poco clara: " + ([...(r.errs || []), ...(r.obs || [])].join(" · ") || "sin resultado") };
-    await guardarFactura(arca, o.id, rev); facturas[o.id] = rev;
+    await guardarFactura(arca, clave, rev); facturas[clave] = rev;
     throw new Error(rev.aviso);
   }
   const f = { ...base, total: r.total, neto: r.neto, iva: r.iva, cae: r.cae, vto: r.vto, estado: "emitida", at: new Date().toISOString(), obs: r.obs && r.obs.length ? r.obs : undefined };
-  await guardarFactura(arca, o.id, f);
-  facturas[o.id] = f;
+  await guardarFactura(arca, clave, f);
+  facturas[clave] = f;
   return f;
 }
 
+const emitirUno = (arca, o, facturas) => emitirComp(arca, facturas, o.id, {
+  tipo: FACTURA_B, pedido: o.n, orderId: o.id, items: itemsDe(o), envio: Number(o.ship) || 0, total: Number(o.cur != null ? o.cur : o.tot),
+});
+
+// Nota de crédito B por el total de la factura vigente del pedido.
+async function emitirNC(arca, facturas, orderId) {
+  const f = facturas[orderId];
+  if (!f || f.tipo !== FACTURA_B) throw new Error("Ese pedido no tiene una factura vigente.");
+  if (f.estado !== "emitida") throw new Error("La factura todavía no está confirmada en ARCA.");
+  const ya = Object.values(facturas).find((x) => x.tipo === NC_B && x.orderId === orderId && x.asociado && x.asociado.nro === f.nro && x.asociado.pto === f.pto);
+  if (ya) { if (ya.estado === "emitida") { await finalizarNC(arca, facturas, ya); return ya; } throw new Error("La nota de crédito de esta factura quedó a medio emitir: tocá de nuevo en unos minutos."); }
+  if (f.pto !== arca.ptoVta) throw new Error(`La factura es del punto de venta ${f.pto} y ahora usás el ${arca.ptoVta}. La nota de crédito tiene que salir del mismo punto: hacela desde ARCA.`);
+  const nc = await emitirComp(arca, facturas, `nc:${orderId}:${f.nro}`, {
+    tipo: NC_B, pedido: f.pedido, orderId, items: f.items, envio: f.envio, total: f.total,
+    asociado: { tipo: FACTURA_B, pto: f.pto, nro: f.nro, fecha: f.fecha },
+  });
+  await finalizarNC(arca, facturas, nc);
+  return nc;
+}
+
 async function enviarEmail(sec, arca, f) {
+  if (f.tipo !== FACTURA_B || f.estado !== "emitida") throw new Error("Solo se manda por email una factura vigente.");
   const mail = sec.mail;
   if (!mail || !mail.resendKey || !mail.from) throw new Error("Falta configurar el envío de emails.");
   const sh = sec.shopify;
@@ -136,7 +176,11 @@ async function enviarEmail(sec, arca, f) {
     body: JSON.stringify({ from: mail.from, to: [c.email], reply_to: mail.replyTo || undefined, subject: `Tu factura de Impoluto · pedido ${f.pedido}`, html, attachments: [{ filename: `Factura-B-${numeroFactura(f)}.pdf`, content: pdf.toString("base64") }] }),
   });
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error("No se pudo mandar el email: " + (j.message || r.status)); }
-  const env = { ...f, emailAt: new Date().toISOString() };
+  // Se vuelve a leer: si mientras tanto la anularon, no se pisa el registro.
+  const actualRaw = await redis.hget(factKey(arca), f.orderId);
+  const actual = typeof actualRaw === "string" ? safeParse(actualRaw) : actualRaw;
+  if (!actual || actual.tipo !== FACTURA_B || actual.nro !== f.nro || actual.pto !== f.pto || actual.estado !== "emitida") return f;
+  const env = { ...actual, emailAt: new Date().toISOString() };
   await guardarFactura(arca, f.orderId, env);
   return env;
 }
@@ -153,21 +197,31 @@ export default async function handler(req, res) {
     if (q.pdf) {
       if (!arca) return deny(res, 404, "Esa factura no existe.");
       const f = (await leerFacturas(arca))[q.pdf];
-      if (!f || f.estado !== "emitida") return deny(res, 404, "Esa factura no existe.");
+      if (!f || (f.estado !== "emitida" && f.estado !== "anulada")) return deny(res, 404, "Ese comprobante no existe.");
       const pdf = await facturaPdf(arca, arca.emisor || {}, f);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `inline; filename="Factura-B-${numeroFactura(f)}.pdf"`);
+      res.setHeader("Content-Disposition", `inline; filename="${f.tipo === NC_B ? "Nota-de-Credito-B" : "Factura-B"}-${numeroFactura(f)}.pdf"`);
       return res.status(200).send(pdf);
     }
     const facturas = await leerFacturas(arca);
     const desde = (arca && arca.desde) || hoyAR().slice(0, 8) + "01";
     const ords = await leerHash(ORDERS);
     const pendientes = Object.values(ords)
-      .filter((o) => o && dayOf(o.c) >= desde && !facturas[o.id])
+      .filter((o) => o && dayOf(o.c) >= desde && !facturas[o.id] && !Object.values(facturas).some((f) => f.tipo === NC_B && f.orderId === o.id && f.estado !== "emitida"))
       .map((o) => ({ id: o.id, n: o.n, c: o.c, total: Number(o.cur != null ? o.cur : o.tot), motivo: motivoNoFacturable(o) }))
       .filter((o) => !/prueba|cancelado/i.test(o.motivo || ""))
       .sort((a, b) => a.c.localeCompare(b.c));
-    return res.status(200).json({ arca: publico(arca), mail: sec.mail ? { from: sec.mail.from } : null, desde, pendientes, facturas: Object.values(facturas).sort((a, b) => (b.nro || 0) - (a.nro || 0)) });
+    // Pedidos con factura vigente que después se cancelaron o devolvieron: necesitan nota de crédito.
+    const aAnular = Object.entries(facturas)
+      .filter(([k, f]) => k === f.orderId && f.tipo === FACTURA_B && f.estado === "emitida")
+      .map(([k, f]) => ({ f, o: ords[k] }))
+      .filter(({ o }) => o && (o.x || Number(o.ref) > 0 || /REFUNDED|VOIDED/.test(o.f || "")))
+      .map(({ f, o }) => {
+        const parcial = !o.x && o.f === "PARTIALLY_REFUNDED";
+        return { orderId: f.orderId, pedido: f.pedido, nro: f.nro, pto: f.pto, total: f.total, parcial, motivo: o.x ? "Se canceló" : parcial ? "Devolución parcial: consultá al contador antes de anular (la nota de crédito es por el total)" : "Se devolvió" };
+      });
+    const lista = Object.entries(facturas).map(([k, f]) => ({ ...f, clave: k })).sort((a, b) => (b.at || b.sentAt || "").localeCompare(a.at || a.sentAt || ""));
+    return res.status(200).json({ arca: publico(arca), mail: sec.mail ? { from: sec.mail.from } : null, desde, pendientes, aAnular, facturas: lista });
   }
 
   if (req.method !== "POST") return res.status(405).end();
@@ -215,6 +269,8 @@ export default async function handler(req, res) {
           const ultimo = await ultimoNumero({ ...arca, ptoVta: pto }, FACTURA_B);
           const propio = maxPropio(facturas, pto);
           if (ultimo !== propio) return res.status(400).json({ error: `El punto de venta ${pto} ya tiene ${ultimo - propio} facturas hechas por otro sistema (por ejemplo, las de Mercado Libre). Creá en ARCA un punto de venta nuevo solo para esta app.` });
+          const ultimoNC = await ultimoNumero({ ...arca, ptoVta: pto }, NC_B);
+          if (ultimoNC !== maxPropio(facturas, pto, NC_B)) return res.status(400).json({ error: `El punto de venta ${pto} ya tiene notas de crédito de otro sistema. Creá en ARCA un punto de venta nuevo solo para esta app.` });
         }
         next.ptoVta = pto;
       }
@@ -267,10 +323,23 @@ export default async function handler(req, res) {
       } finally { if ((await redis.get(LOCK)) === token) await redis.del(LOCK); }
       return res.status(200).json({ ok: true, resultados: out });
     }
+    if (b.action === "anular") {
+      if (!arca || !arca.cert || !arca.key) return res.status(400).json({ error: "Falta conectar ARCA." });
+      if (!arca.ptoVta || !ALICUOTAS[String(arca.alicuota)]) return res.status(400).json({ error: "Falta el punto de venta o el IVA." });
+      const token = "t-" + Math.random().toString(36).slice(2) + "-" + Date.now();
+      const lock = await redis.set(LOCK, token, { nx: true, ex: 90 });
+      if (!lock) return res.status(409).json({ error: "Ya se está emitiendo algo. Esperá unos segundos." });
+      try {
+        const facturas = await leerFacturas(arca);
+        await resolverPendientes(arca, facturas);
+        const nc = await emitirNC(arca, facturas, String(b.id));
+        return res.status(200).json({ ok: true, nc });
+      } finally { if ((await redis.get(LOCK)) === token) await redis.del(LOCK); }
+    }
     if (b.action === "email") {
       if (!arca) return res.status(400).json({ error: "Falta conectar ARCA." });
       const f = (await leerFacturas(arca))[String(b.id)];
-      if (!f || f.estado !== "emitida") return res.status(400).json({ error: "Esa factura no está emitida." });
+      if (!f || f.estado !== "emitida" || f.tipo !== FACTURA_B || f.orderId !== String(b.id)) return res.status(400).json({ error: "Esa factura no está vigente." });
       const env = await enviarEmail(sec, arca, f);
       return res.status(200).json({ ok: true, f: env });
     }

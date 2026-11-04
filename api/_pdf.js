@@ -30,13 +30,14 @@ export async function facturaPdf(cfg, emisorIn, f) {
   page.drawRectangle({ x: M, y: 690, width: W - 2 * M, height: 120, borderColor: linea, borderWidth: 0.8 });
   page.drawLine({ start: { x: W / 2, y: 690 }, end: { x: W / 2, y: 770 }, thickness: 0.8, color: linea });
   page.drawRectangle({ x: W / 2 - 24, y: 770, width: 48, height: 40, color: rgb(1, 1, 1), borderColor: negro, borderWidth: 1 });
+  const esNC = f.tipo === 8;
   txt("B", W / 2 - 8, 784, { size: 22, bold: true });
-  txt("COD. 006", W / 2 - 18, 773, { size: 6.5 });
+  txt(esNC ? "COD. 008" : "COD. 006", W / 2 - 18, 773, { size: 6.5 });
   txt(emisor.razon, M + 12, 785, { size: 13, bold: true });
   txt(emisor.domicilio, M + 12, 760, { size: 8.5 });
   txt("Condición frente al IVA: " + (emisor.condicion || "IVA Responsable Inscripto"), M + 12, 746, { size: 8.5 });
   txt("ORIGINAL", W - M - 60, 795, { size: 8, bold: true, color: gris });
-  txt("FACTURA", W / 2 + 34, 764, { size: 14, bold: true });
+  txt(esNC ? "NOTA DE CRÉDITO" : "FACTURA", W / 2 + 34, 764, { size: 14, bold: true });
   txt("Punto de venta: " + pad(f.pto, 5) + "     Comp. Nro: " + pad(f.nro, 8), W / 2 + 34, 749, { size: 8.5, bold: true });
   txt("Fecha de emisión: " + fechaAR(f.fecha), W / 2 + 34, 736, { size: 8.5 });
   txt("CUIT: " + emisor.cuit, W / 2 + 34, 724, { size: 8.5 });
@@ -49,6 +50,7 @@ export async function facturaPdf(cfg, emisorIn, f) {
   if (f.cliente) txt("Cliente: " + f.cliente, M + 160, y, { size: 9 });
   txt("Pedido: " + (f.pedido || ""), W - M - 110, y, { size: 9 });
   y -= 14; txt("Condición de venta: Contado / pago electrónico", M, y, { size: 8.5, color: gris });
+  if (esNC && f.asociado) { y -= 12; txt(`Comprobante asociado: Factura B ${pad(f.asociado.pto, 5)}-${pad(f.asociado.nro, 8)} del ${fechaAR(f.asociado.fecha)}`, M, y, { size: 8.5, bold: true }); }
   y -= 12; hr(y);
 
   // Detalle
@@ -83,7 +85,7 @@ export async function facturaPdf(cfg, emisorIn, f) {
   txt("Comprobante autorizado por ARCA", M + 105, 125, { size: 9, bold: true });
   txt("CAE: " + f.cae, M + 105, 110, { size: 9 });
   txt("Vencimiento del CAE: " + fechaAR(f.vto), M + 105, 96, { size: 9 });
-  txt("Factura " + numeroFactura(f), M + 105, 82, { size: 8, color: gris });
+  txt((esNC ? "Nota de crédito " : "Factura ") + numeroFactura(f), M + 105, 82, { size: 8, color: gris });
 
   return Buffer.from(await pdf.save());
 }
