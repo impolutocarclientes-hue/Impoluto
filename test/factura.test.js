@@ -32,7 +32,7 @@ process.env.KV_REST_API_TOKEN = "t";
 process.env.APP_PASSWORD = "clave-test";
 
 // ---- ARCA falso ----
-const arcaFake = { last: 41, lastNC: 0, comps: {}, ncs: {}, ncBody: null, cortar: false, lento: null, consultaFalla: false, logins: 0, cmsOk: false };
+const arcaFake = { lastA: 0, lastNCA: 0, compsA: {}, aBody: null, ncaBody: null, last: 41, lastNC: 0, comps: {}, ncs: {}, ncBody: null, cortar: false, lento: null, consultaFalla: false, logins: 0, cmsOk: false };
 // ---- Shopify falso: el pedido "de verdad" en este momento ----
 const shopOrders = {};
 const raw = (o) => ({ id: "gid://shopify/Order/" + o.id, name: o.n, createdAt: o.c, processedAt: o.c, updatedAt: o.c, cancelledAt: o.x, test: o.t, displayFinancialStatus: o.f, paymentGatewayNames: ["mercado_pago"], sourceName: o.s,
@@ -62,7 +62,16 @@ globalThis.fetch = async (url, opts = {}) => {
   const action = String(opts.headers.SOAPAction).split("/").pop();
   assert.match(body, /<Token>TOK<\/Token><Sign>SIG<\/Sign><Cuit>20111111112<\/Cuit>/);
   if (action === "FEParamGetPtosVenta") return xml(`<R><ResultGet><PtoVenta><Nro>3</Nro><EmisionTipo>CAE</EmisionTipo><Bloqueado>N</Bloqueado><FchBaja>NULL</FchBaja></PtoVenta></ResultGet></R>`);
-  if (action === "FECompUltimoAutorizado") return xml(`<R><CbteNro>${tagv(body, "CbteTipo") === "8" ? arcaFake.lastNC : arcaFake.last}</CbteNro></R>`);
+  if (action === "FECompUltimoAutorizado") { const t = tagv(body, "CbteTipo"); return xml(`<R><CbteNro>${t === "8" ? arcaFake.lastNC : t === "1" ? arcaFake.lastA : t === "3" ? arcaFake.lastNCA : arcaFake.last}</CbteNro></R>`); }
+  if (action === "FECAESolicitar" && (tagv(body, "CbteTipo") === "1" || tagv(body, "CbteTipo") === "3")) {
+    const t = tagv(body, "CbteTipo"), nro = Number(tagv(body, "CbteDesde"));
+    assert.equal(tagv(body, "DocTipo"), "80");
+    const ultimo = t === "1" ? arcaFake.lastA : arcaFake.lastNCA;
+    if (nro !== ultimo + 1) return xml(`<R><FECAEDetResponse><Resultado>R</Resultado></FECAEDetResponse></R>`);
+    if (t === "1") { arcaFake.aBody = body; arcaFake.lastA = nro; arcaFake.compsA[nro] = { total: Number(tagv(body, "ImpTotal")), doc: tagv(body, "DocNro") }; }
+    else { arcaFake.ncaBody = body; assert.equal(tagv(body, "DocNro"), arcaFake.compsA[Number(tagv(tagv(body, "CbteAsoc"), "Nro"))].doc); arcaFake.lastNCA = nro; }
+    return xml(`<R><FECAEDetResponse><Resultado>A</Resultado><CAE>${t}${String(nro).padStart(13, "0")}</CAE><CAEFchVto>20261120</CAEFchVto></FECAEDetResponse></R>`);
+  }
   if (action === "FECompConsultar") {
     if (arcaFake.consultaFalla) return xml(`<R><Errors><Err><Code>500</Code><Msg>Error interno de aplicacion</Msg></Err></Errors></R>`);
     const c = (tagv(body, "CbteTipo") === "8" ? arcaFake.ncs : arcaFake.comps)[tagv(body, "CbteNro")];
@@ -278,6 +287,7 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
   assert.match(arcaFake.ncBody, /<CbtesAsoc><CbteAsoc><Tipo>6<\/Tipo><PtoVta>3<\/PtoVta><Nro>2<\/Nro>/);
   r = await call("GET");
   const anul = r.body.facturas.find((f) => f.clave === "anulada:1002:2");
+  assert.ok(r.body.facturas.find((f) => f.clave === "nc:1002:B2"));
   assert.equal(anul.estado, "anulada"); assert.equal(anul.anuladaPor.nro, 1);
   assert.ok(r.body.pendientes.some((p) => p.id === "1002"), "el pedido vuelve a estar para facturar");
   // Anular de nuevo: ya no hay factura vigente, no sale otra nota de crédito
@@ -291,9 +301,38 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
   r = await call("GET");
   assert.deepEqual(r.body.aAnular.map((x) => x.orderId), ["1001"]);
   // Un email de una nota de crédito o de una factura anulada no pisa nada
-  r = await call("POST", { action: "email", id: "nc:1002:2" });
+  r = await call("POST", { action: "email", id: "nc:1002:B2" });
   assert.equal(r.status, 400);
-  r = await call("GET", null, { pdf: "nc:1002:2" });
+  r = await call("GET", null, { pdf: "nc:1002:B2" });
+  assert.equal(r.body.slice(0, 5).toString(), "%PDF-");
+
+  // 10) Factura A a un cliente monotributista: numeración propia, va con su CUIT
+  await redis.hset(ORDERS, { "1010": JSON.stringify(order("1010", 67990)) }); shopOrders["1010"] = order("1010", 67990);
+  r = await call("POST", { action: "emitirA", id: "1010", cuit: "20-11111111-3", cond: "mono", razon: "Taller X", domicilio: "Calle 1, Lanús" });
+  assert.match(r.body.error, /CUIT del cliente no es válido/);
+  r = await call("POST", { action: "emitirA", id: "1010", cuit: "20111111112", cond: "mono", razon: "Taller X", domicilio: "Calle 1, Lanús" });
+  assert.match(r.body.error, /es el tuyo/);
+  r = await call("POST", { action: "emitirA", id: "1010", cuit: "27-22222222-8", cond: "mono", razon: "Taller X", domicilio: "Calle 1, Lanús" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.f.tipo, 1); assert.equal(r.body.f.nro, 1); assert.equal(r.body.f.receptor.cuit, "27222222228");
+  assert.equal(tagv(arcaFake.aBody, "DocNro"), "27222222228");
+  assert.equal(tagv(arcaFake.aBody, "CondicionIVAReceptorId"), "6");
+  const lastB = arcaFake.last;
+  // El mismo pedido no se puede facturar de nuevo (ni A ni B)
+  r = await call("POST", { action: "emitirA", id: "1010", cuit: "27222222228", cond: "ri", razon: "Taller X", domicilio: "Calle 1" });
+  assert.match(r.body.error, /ya tiene factura/);
+  r = await call("POST", { action: "emitir", ids: ["1010"] });
+  assert.equal(r.body.resultados[0].ya, true); assert.equal(arcaFake.last, lastB);
+  r = await call("GET", null, { pdf: "1010" });
+  assert.equal(r.body.slice(0, 5).toString(), "%PDF-");
+  // Nota de crédito A: tipo 3, asociada a la A, mismo CUIT
+  r = await call("POST", { action: "anular", id: "1010" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.nc.tipo, 3); assert.equal(r.body.nc.nro, 1);
+  assert.match(arcaFake.ncaBody, /<CbteAsoc><Tipo>1<\/Tipo>/);
+  r = await call("GET");
+  assert.equal(r.body.facturas.find((f) => f.clave === "anulada:1010:A1").estado, "anulada");
+  r = await call("GET", null, { pdf: "nc:1010:A1" });
   assert.equal(r.body.slice(0, 5).toString(), "%PDF-");
 
   // 8) PDF

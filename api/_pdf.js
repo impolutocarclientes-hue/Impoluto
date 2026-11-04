@@ -30,9 +30,11 @@ export async function facturaPdf(cfg, emisorIn, f) {
   page.drawRectangle({ x: M, y: 690, width: W - 2 * M, height: 120, borderColor: linea, borderWidth: 0.8 });
   page.drawLine({ start: { x: W / 2, y: 690 }, end: { x: W / 2, y: 770 }, thickness: 0.8, color: linea });
   page.drawRectangle({ x: W / 2 - 24, y: 770, width: 48, height: 40, color: rgb(1, 1, 1), borderColor: negro, borderWidth: 1 });
-  const esNC = f.tipo === 8;
-  txt("B", W / 2 - 8, 784, { size: 22, bold: true });
-  txt(esNC ? "COD. 008" : "COD. 006", W / 2 - 18, 773, { size: 6.5 });
+  const esNC = f.tipo === 8 || f.tipo === 3;
+  const esA = f.tipo === 1 || f.tipo === 3;
+  const L = esA ? "A" : "B";
+  txt(L, W / 2 - 8, 784, { size: 22, bold: true });
+  txt("COD. " + pad(f.tipo, 3), W / 2 - 18, 773, { size: 6.5 });
   txt(emisor.razon, M + 12, 785, { size: 13, bold: true });
   txt(emisor.domicilio, M + 12, 760, { size: 8.5 });
   txt("Condición frente al IVA: " + (emisor.condicion || "IVA Responsable Inscripto"), M + 12, 746, { size: 8.5 });
@@ -46,19 +48,37 @@ export async function facturaPdf(cfg, emisorIn, f) {
 
   // Receptor
   let y = 670;
-  txt("A CONSUMIDOR FINAL", M, y, { size: 10, bold: true });
-  if (f.cliente) txt("Cliente: " + f.cliente, M + 160, y, { size: 9 });
-  txt("Pedido: " + (f.pedido || ""), W - M - 110, y, { size: 9 });
+  const r = f.receptor;
+  if (esA && r) {
+    txt("Razón social: " + r.razon, M, y, { size: 9.5, bold: true });
+    txt("Pedido: " + (f.pedido || ""), W - M - 110, y, { size: 9 });
+    y -= 13; txt("CUIT: " + cuitFmt(r.cuit) + "     Condición frente al IVA: " + (r.cond === "mono" ? "Responsable Monotributo" : "IVA Responsable Inscripto"), M, y, { size: 8.5 });
+    y -= 12; txt("Domicilio: " + r.domicilio, M, y, { size: 8.5 });
+  } else {
+    txt("A CONSUMIDOR FINAL", M, y, { size: 10, bold: true });
+    if (f.cliente) txt("Cliente: " + f.cliente, M + 160, y, { size: 9 });
+    txt("Pedido: " + (f.pedido || ""), W - M - 110, y, { size: 9 });
+  }
   y -= 14; txt("Condición de venta: Contado / pago electrónico", M, y, { size: 8.5, color: gris });
-  if (esNC && f.asociado) { y -= 12; txt(`Comprobante asociado: Factura B ${pad(f.asociado.pto, 5)}-${pad(f.asociado.nro, 8)} del ${fechaAR(f.asociado.fecha)}`, M, y, { size: 8.5, bold: true }); }
+  if (esNC && f.asociado) { y -= 12; txt(`Comprobante asociado: Factura ${f.asociado.tipo === 1 ? "A" : "B"} ${pad(f.asociado.pto, 5)}-${pad(f.asociado.nro, 8)} del ${fechaAR(f.asociado.fecha)}`, M, y, { size: 8.5, bold: true }); }
   y -= 12; hr(y);
 
   // Detalle
   y -= 16;
   txt("Producto", M, y, { bold: true }); right("Cant.", 380, y, { bold: true }); right("Precio unit.", 470, y, { bold: true }); right("Subtotal", W - M, y, { bold: true });
   y -= 6; hr(y);
-  const filas = [...(f.items || [])];
-  if (Number(f.envio) > 0) filas.push({ ti: "Envío", q: 1, tot: f.envio });
+  const k = esA ? 1 + Number(f.alicuota || 21) / 100 : 1; // en la A los precios van sin IVA
+  const filas = [...(f.items || [])].map((it) => ({ ...it, tot: Math.round((Number(it.tot) / k) * 100) / 100 }));
+  if (Number(f.envio) > 0) filas.push({ ti: "Envío", q: 1, tot: Math.round((Number(f.envio) / k) * 100) / 100 });
+  if (esA) {
+    // Los centavos de redondeo van a la línea más grande, así las líneas suman exacto el neto.
+    const origBruto = [...(f.items || []).map((it) => Number(it.tot) || 0), Number(f.envio) > 0 ? Number(f.envio) : 0].reduce((a, v) => a + v, 0);
+    if (Math.abs(origBruto - f.total) < 0.01 && filas.length) {
+      const dif = Math.round((f.neto - filas.reduce((a, it) => a + it.tot, 0)) * 100) / 100;
+      const big = filas.reduce((m, it, i) => (it.tot > filas[m].tot ? i : m), 0);
+      if (Math.abs(dif) < 1) filas[big].tot = Math.round((filas[big].tot + dif) * 100) / 100;
+    }
+  }
   for (const it of filas) {
     y -= 15;
     const nom = limpio(it.ti).slice(0, 62);
@@ -66,17 +86,28 @@ export async function facturaPdf(cfg, emisorIn, f) {
     right(pesos(it.q ? Number(it.tot) / it.q : 0), 470, y); right(pesos(it.tot), W - M, y);
   }
   const bruto = filas.reduce((a, it) => a + Number(it.tot || 0), 0);
-  const desc = Math.round((bruto - f.total) * 100) / 100;
+  const desc = Math.round((bruto - (esA ? f.neto : f.total)) * 100) / 100;
   if (desc > 0.009) { y -= 15; txt("Descuentos", M, y); right("- " + pesos(desc), W - M, y); }
   else if (desc < -0.009) { y -= 15; txt("Otros cargos", M, y); right(pesos(-desc), W - M, y); }
   y -= 10; hr(y);
+  if (esA) {
+    y -= 16; right("Subtotal (neto gravado)", 470, y); right(pesos(f.neto), W - M, y);
+    y -= 14; right(`IVA ${String(f.alicuota || 21).replace(".", ",")} %`, 470, y); right(pesos(f.iva), W - M, y);
+  }
   y -= 20; right("TOTAL", 470, y, { size: 12, bold: true }); right(pesos(f.total), W - M, y, { size: 12, bold: true });
 
-  // Transparencia fiscal (Ley 27.743)
-  y -= 30;
-  txt("Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)", M, y, { size: 8.5, bold: true });
-  y -= 12; txt("IVA Contenido: " + pesos(f.iva), M, y, { size: 8.5 });
-  y -= 12; txt("Otros Impuestos Nacionales Indirectos: $ 0,00", M, y, { size: 8.5 });
+  if (!esA) {
+    // Transparencia fiscal (Ley 27.743)
+    y -= 30;
+    txt("Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)", M, y, { size: 8.5, bold: true });
+    y -= 12; txt("IVA Contenido: " + pesos(f.iva), M, y, { size: 8.5 });
+    y -= 12; txt("Otros Impuestos Nacionales Indirectos: $ 0,00", M, y, { size: 8.5 });
+
+  } else if (r && r.cond === "mono") {
+    y -= 30;
+    txt("El crédito fiscal discriminado en el presente comprobante sólo podrá ser computado a efectos del Régimen de", M, y, { size: 7.5 });
+    y -= 10; txt("Sostenimiento e Inclusión Fiscal para Pequeños Contribuyentes de la Ley Nº 27.618.", M, y, { size: 7.5 });
+  }
 
   // QR + CAE
   const png = await QRCode.toBuffer(qrUrl(cfg, f), { margin: 0, width: 220, errorCorrectionLevel: "M" });

@@ -1,6 +1,6 @@
 // Pantalla «Facturación»: conectar ARCA, revisar los pedidos pagados y emitir las facturas B cuando el usuario lo pide.
 let H = null; // helpers de app.js: { api, toast, render, esc, money }
-const F = { data: null, loading: false, sel: new Set(), confirm: false, emitiendo: false, csr: null, puntos: null, edit: false, err: null, anular: null, anulando: false, libroMes: null };
+const F = { facA: null, data: null, loading: false, sel: new Set(), confirm: false, emitiendo: false, csr: null, puntos: null, edit: false, err: null, anular: null, anulando: false, libroMes: null };
 
 export function initFacturas(helpers) { H = helpers; }
 export async function cargarFacturas(force) {
@@ -10,11 +10,13 @@ export async function cargarFacturas(force) {
   F.loading = false; H.render();
 }
 
+const cuitOk = (c) => { const s = String(c || ""); if (!/^\d{11}$/.test(s)) return false; const w = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]; const r = 11 - (w.reduce((a, x, i) => a + x * Number(s[i]), 0) % 11); return (r === 11 ? 0 : r === 10 ? 9 : r) === Number(s[10]); };
 const fecha = (iso) => new Date(iso).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
 const fch = (s) => (s ? `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)}` : "");
 const nro = (f) => `${String(f.pto).padStart(5, "0")}-${String(f.nro).padStart(8, "0")}`;
-const esNC = (f) => f.tipo === 8;
-const nombre = (f) => (esNC(f) ? "NC B " : "Factura B ") + nro(f);
+const esNC = (f) => f.tipo === 8 || f.tipo === 3;
+const letraDe = (t) => (t === 1 || t === 3 ? "A" : "B");
+const nombre = (f) => (esNC(f) ? "NC " : "Factura ") + letraDe(f.tipo) + " " + nro(f);
 
 function pasos(d) {
   const { esc } = H;
@@ -92,11 +94,24 @@ export function viewFacturas() {
     h += `<p class="banner warn"><b>${d.aAnular.length === 1 ? "Hay un pedido facturado que" : "Hay " + d.aAnular.length + " pedidos facturados que"} después se canceló o devolvió.</b> Necesita${d.aAnular.length === 1 ? "" : "n"} nota de crédito: ${d.aAnular.map((x) => `${esc(x.pedido)} (${esc(x.motivo.charAt(0).toLowerCase() + x.motivo.slice(1))}, factura ${esc(nro(x))})`).join(" · ")}. Usá «Anular» en la lista de abajo.</p>`;
   }
 
+  // Formulario de factura A
+  if (F.facA) {
+    const p = fact.find((x) => x.id === F.facA);
+    if (!p) F.facA = null;
+    else h += `<div class="card" style="display:grid;gap:10px;border-color:var(--pink)"><h3 style="margin:0">Factura A · pedido ${esc(p.n)} · ${money(p.total)}</h3>
+      <p class="note" style="margin:0">Para un cliente que te pidió factura con su CUIT. Copiá los datos tal cual figuran en su constancia de ARCA. La factura A discrimina el IVA y el cliente la puede usar como crédito fiscal.</p>
+      <div class="form"><label class="f"><span>CUIT del cliente</span><input class="in" id="fa-a-cuit" inputmode="numeric" placeholder="30712345678" value="${esc((F.aDatos && F.aDatos.cuit) || "")}" ${F.confirmA ? "readonly" : ""}></label>
+      <label class="f"><span>Condición frente al IVA</span><select class="in" id="fa-a-cond" ${F.confirmA ? "disabled" : ""}><option value="">Elegí…</option><option value="ri" ${F.aDatos && F.aDatos.cond === "ri" ? "selected" : ""}>Responsable inscripto</option><option value="mono" ${F.aDatos && F.aDatos.cond === "mono" ? "selected" : ""}>Monotributista</option></select></label>
+      <label class="f" style="grid-column:1/-1"><span>Nombre o razón social</span><input class="in" id="fa-a-razon" value="${esc((F.aDatos && F.aDatos.razon) || "")}" ${F.confirmA ? "readonly" : ""}></label>
+      <label class="f" style="grid-column:1/-1"><span>Domicilio</span><input class="in" id="fa-a-dom" placeholder="Calle 123, Localidad, Provincia" value="${esc((F.aDatos && F.aDatos.domicilio) || "")}" ${F.confirmA ? "readonly" : ""}></label></div>
+      <div class="actions">${F.confirmA ? `<button class="ctl pri" data-fact="facA-ok" data-id="${esc(p.id)}" ${F.emitiendo ? "disabled" : ""}>${F.emitiendo ? "Emitiendo…" : "Sí, emitir factura A por " + money(p.total)}</button><button class="ctl" data-fact="facA-volver">Revisar datos</button><span class="note">Una factura emitida no se borra: si hay un error se hace nota de crédito.</span>` : `<button class="ctl pri" data-fact="facA-pre">Emitir factura A</button><button class="ctl" data-fact="facA-no">Cancelar</button>`}</div></div>`;
+  }
+
   // Para facturar
   h += `<section class="block"><div class="bh"><h2>Para facturar</h2><span class="note">${fact.length} pedidos pagados desde el ${esc(new Date(d.desde + "T12:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "short" }))}</span></div>`;
   if (fact.length) {
-    h += `<div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:28px"><input type="checkbox" data-fact-all ${F.sel.size === fact.length ? "checked" : ""}></th><th>Pedido</th><th>Fecha</th><th class="r">Total</th></tr></thead><tbody>
-      ${fact.map((p) => `<tr><td><input type="checkbox" data-fact-sel="${esc(p.id)}" ${F.sel.has(p.id) ? "checked" : ""}></td><td>${esc(p.n)}</td><td>${esc(fecha(p.c))}</td><td class="r">${money(p.total)}</td></tr>`).join("")}</tbody></table></div>
+    h += `<div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:28px"><input type="checkbox" data-fact-all ${F.sel.size === fact.length ? "checked" : ""}></th><th>Pedido</th><th>Fecha</th><th class="r">Total</th><th></th></tr></thead><tbody>
+      ${fact.map((p) => `<tr><td><input type="checkbox" data-fact-sel="${esc(p.id)}" ${F.sel.has(p.id) ? "checked" : ""}></td><td>${esc(p.n)}</td><td>${esc(fecha(p.c))}</td><td class="r">${money(p.total)}</td><td class="r"><button class="ctl" data-fact="facA" data-id="${esc(p.id)}" ${listo ? "" : "disabled"} title="Para un cliente responsable inscripto o monotributista que te pide factura con su CUIT">Factura A</button></td></tr>`).join("")}</tbody></table></div>
       <div class="actions" style="margin-top:10px">
       ${F.confirm ? `<button class="ctl pri" data-fact="emitir" ${F.emitiendo ? "disabled" : ""}>${F.emitiendo ? "Emitiendo…" : `Sí, emitir ${F.sel.size} factura${F.sel.size === 1 ? "" : "s"} por ${money(selTot)}`}</button><button class="ctl" data-fact="cancelar">Cancelar</button><span class="note">Una factura emitida no se borra: si hay que corregirla se hace una nota de crédito.</span>`
       : `<button class="ctl pri" data-fact="pre-emitir" ${listo && F.sel.size ? "" : "disabled"}>Emitir ${F.sel.size || ""} factura${F.sel.size === 1 ? "" : "s"}</button><span class="note">${F.sel.size > 10 ? "Se emiten de a 10 por vez." : "Factura B a consumidor final" + (a.alicuota ? ", IVA " + a.alicuota.replace(".", ",") + " %" : "") + "."}</span>`}</div>`;
@@ -116,7 +131,7 @@ export function viewFacturas() {
       : ` <button class="ctl" data-fact="anular" data-id="${esc(f.clave)}">${aAnularIds.has(f.orderId) ? "⚠ Anular" : "Anular"}</button>`;
     return pdf + mail + an;
   };
-  const estadoTxt = (f) => (esNC(f) ? `Anula la ${f.asociado ? "B " + nro(f.asociado) : "factura"}` : f.estado === "anulada" ? `<span class="down">Anulada</span>` : "");
+  const estadoTxt = (f) => (esNC(f) ? `Anula la ${f.asociado ? letraDe(f.asociado.tipo) + " " + nro(f.asociado) : "factura"}` : f.estado === "anulada" ? `<span class="down">Anulada</span>` : f.receptor ? `<span class="muted small">${esc(f.receptor.razon)}</span>` : "");
   const meses = [...new Set(em.map((f) => f.fecha.slice(0, 6)))].sort().reverse();
   if (!F.libroMes || !meses.includes(F.libroMes)) F.libroMes = meses[0] || null;
   h += `<section class="block"><div class="bh"><h2>Comprobantes emitidos</h2>${meses.length ? `<div class="actions"><select class="in" data-fact-mes>${meses.map((m) => `<option value="${m}" ${m === F.libroMes ? "selected" : ""}>${m.slice(4, 6)}/${m.slice(0, 4)}</option>`).join("")}</select><button class="ctl" data-fact="libro">Libro IVA Ventas (Excel)</button></div>` : ""}</div>`;
@@ -153,7 +168,7 @@ export async function onFactClick(e) {
       F.puntos = r.puntos; F.edit = false; F.csr = null; await cargarFacturas(true); toast("ARCA conectado");
     } else if (act === "reconectar") { F.edit = !F.edit; render(); }
     else if (act === "puntos") { const r = await post({ action: "puntos" }); F.puntos = r.puntos; if (!r.puntos.length) toast("ARCA todavía no tiene puntos de venta web service. Crealo (paso 4) y volvé a buscar."); render(); }
-    else if (act === "pto") { await post({ action: "config", ptoVta: Number(t.dataset.val) }); await cargarFacturas(true); }
+    else if (act === "pto") { const r = await post({ action: "config", ptoVta: Number(t.dataset.val) }); if (r.aviso) toast(r.aviso); await cargarFacturas(true); }
     else if (act === "alic") { await post({ action: "config", alicuota: t.dataset.val || null }); await cargarFacturas(true); }
     else if (act === "guardar-emisor") {
       const emisor = {}; document.querySelectorAll("[data-emisor]").forEach((i) => (emisor[i.dataset.emisor] = i.value));
@@ -173,6 +188,21 @@ export async function onFactClick(e) {
       ok.forEach((x) => F.sel.delete(x.id));
       toast(`${ok.length} factura${ok.length === 1 ? "" : "s"} emitida${ok.length === 1 ? "" : "s"}${mal.length ? ` · ${mal.length} con error: ${mal[0].error}` : ""}${mailMal.length ? ` · email: ${mailMal[0].mail}` : ""}`);
       F.emitiendo = false; F.confirm = false; await cargarFacturas(true);
+    } else if (act === "facA") { F.facA = t.dataset.id; F.confirmA = false; F.aDatos = null; render(); window.scrollTo(0, 0); }
+    else if (act === "facA-no") { F.facA = null; F.confirmA = false; render(); }
+    else if (act === "facA-volver") { F.confirmA = false; render(); }
+    else if (act === "facA-pre") {
+      const cuit = document.getElementById("fa-a-cuit").value.replace(/\D/g, ""), cond = document.getElementById("fa-a-cond").value;
+      if (!cuitOk(cuit)) return toast("El CUIT no es válido: revisalo (11 números)."), true;
+      if (!cond) return toast("Elegí la condición frente al IVA del cliente."), true;
+      if (document.getElementById("fa-a-razon").value.trim().length < 2 || document.getElementById("fa-a-dom").value.trim().length < 4) return toast("Completá nombre y domicilio del cliente."), true;
+      F.aDatos = { cuit, cond, razon: document.getElementById("fa-a-razon").value.trim(), domicilio: document.getElementById("fa-a-dom").value.trim() };
+      F.confirmA = true; render();
+    } else if (act === "facA-ok") {
+      F.emitiendo = true; render();
+      const r = await post({ action: "emitirA", id: t.dataset.id, ...F.aDatos });
+      F.emitiendo = false; F.confirmA = false; F.facA = null; F.aDatos = null;
+      toast(`Factura A ${nro(r.f)} emitida`); await cargarFacturas(true);
     } else if (act === "anular") { F.anular = t.dataset.id; render(); }
     else if (act === "anular-no") { F.anular = null; render(); }
     else if (act === "anular-ok") {
@@ -187,7 +217,7 @@ export async function onFactClick(e) {
       t.disabled = true; t.textContent = "Mandando…";
       await post({ action: "email", id: t.dataset.id }); toast("Factura enviada"); await cargarFacturas(true);
     }
-  } catch (err) { F.emitiendo = false; F.confirm = false; F.anulando = false; F.anular = null; toast(err.message || String(err)); await cargarFacturas(true); }
+  } catch (err) { F.emitiendo = false; F.confirm = false; F.confirmA = false; F.anulando = false; F.anular = null; toast(err.message || String(err)); await cargarFacturas(true); }
   return true;
 }
 
@@ -208,7 +238,7 @@ function libroIva() {
   for (const f of fil) {
     const sg = esNC(f) ? -1 : 1;
     tn += sg * f.neto; ti += sg * f.iva; tt += sg * f.total;
-    rows.push([fch(f.fecha), esNC(f) ? "Nota de crédito B" : "Factura B", String(f.pto).padStart(5, "0"), String(f.nro).padStart(8, "0"), f.cae, "Consumidor final", f.pedido, String(f.alicuota).replace(".", ",") + " %", n2(sg * f.neto), n2(sg * f.iva), n2(sg * f.total), f.asociado ? "Factura B " + nro(f.asociado) : ""]);
+    rows.push([fch(f.fecha), (esNC(f) ? "Nota de crédito " : "Factura ") + letraDe(f.tipo), String(f.pto).padStart(5, "0"), String(f.nro).padStart(8, "0"), f.cae, f.receptor ? `${f.receptor.razon} (CUIT ${f.receptor.cuit})` : "Consumidor final", f.pedido, String(f.alicuota).replace(".", ",") + " %", n2(sg * f.neto), n2(sg * f.iva), n2(sg * f.total), f.asociado ? "Factura " + letraDe(f.asociado.tipo) + " " + nro(f.asociado) : ""]);
   }
   rows.push(["", "", "", "", "", "", "TOTAL", "", n2(tn), n2(ti), n2(tt), ""]);
   const csv = "\ufeff" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");

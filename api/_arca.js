@@ -10,8 +10,14 @@ const URLS = {
 export const TA_KEY = "impoluto:arca_ta"; // ticket de acceso cacheado (vale 12 h; ARCA no da otro mientras siga vigente)
 
 export const ALICUOTAS = { "10.5": 4, "21": 5 }; // Id de alícuota en ARCA
-export const FACTURA_B = 6, NC_B = 8;
+export const FACTURA_A = 1, NC_A = 3, FACTURA_B = 6, NC_B = 8;
 export const COND_IVA_CONSUMIDOR_FINAL = 5;
+// Condición frente al IVA del cliente de una factura A (tabla de ARCA).
+export const COND_IVA_A = { ri: 1, mono: 6 };
+export const esFactura = (t) => t === FACTURA_A || t === FACTURA_B;
+export const esNC = (t) => t === NC_A || t === NC_B;
+export const ncDe = (t) => (t === FACTURA_A ? NC_A : NC_B);
+export const letra = (t) => (t === FACTURA_A || t === NC_A ? "A" : "B");
 
 export const cuitValido = (c) => {
   const s = String(c || "").replace(/\D/g, "");
@@ -157,12 +163,18 @@ export function montos(total, alicuota) {
 }
 
 // Pide el CAE de UN comprobante con número fijo. Devuelve {ok, cae, vto} o {ok:false, errs, obs}.
-export async function solicitarCae(cfg, { nro, fecha, total, alicuota, tipo = FACTURA_B, asociado = null }, opts) {
+// receptor: null = consumidor final (B); para A: { cuit, cond: "ri" | "mono" }
+export async function solicitarCae(cfg, { nro, fecha, total, alicuota, tipo = FACTURA_B, asociado = null, receptor = null }, opts) {
+  const esA = tipo === FACTURA_A || tipo === NC_A;
+  if (esA && !(receptor && cuitValido(receptor.cuit) && COND_IVA_A[receptor.cond])) throw new Error("Falta el CUIT y la condición frente al IVA del cliente.");
+  if (!esA && receptor) throw new Error("Una factura B no lleva CUIT del cliente.");
+  const doc = esA ? `<DocTipo>80</DocTipo><DocNro>${String(receptor.cuit).replace(/\D/g, "")}</DocNro>` : `<DocTipo>99</DocTipo><DocNro>0</DocNro>`;
+  const cond = esA ? COND_IVA_A[receptor.cond] : COND_IVA_CONSUMIDOR_FINAL;
   const ivaId = ALICUOTAS[String(alicuota)];
   if (!ivaId) throw new Error("Alícuota de IVA sin definir.");
   const m = montos(total, alicuota);
   const asoc = asociado ? `<CbtesAsoc><CbteAsoc><Tipo>${asociado.tipo}</Tipo><PtoVta>${asociado.pto}</PtoVta><Nro>${asociado.nro}</Nro><Cuit>${String(cfg.cuit).replace(/\D/g, "")}</Cuit><CbteFch>${asociado.fecha}</CbteFch></CbteAsoc></CbtesAsoc>` : "";
-  const det = `<FECAEDetRequest><Concepto>1</Concepto><DocTipo>99</DocTipo><DocNro>0</DocNro><CbteDesde>${nro}</CbteDesde><CbteHasta>${nro}</CbteHasta><CbteFch>${fecha}</CbteFch><ImpTotal>${m.total.toFixed(2)}</ImpTotal><ImpTotConc>0.00</ImpTotConc><ImpNeto>${m.neto.toFixed(2)}</ImpNeto><ImpOpEx>0.00</ImpOpEx><ImpTrib>0.00</ImpTrib><ImpIVA>${m.iva.toFixed(2)}</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz><CondicionIVAReceptorId>${COND_IVA_CONSUMIDOR_FINAL}</CondicionIVAReceptorId>${asoc}<Iva><AlicIva><Id>${ivaId}</Id><BaseImp>${m.neto.toFixed(2)}</BaseImp><Importe>${m.iva.toFixed(2)}</Importe></AlicIva></Iva></FECAEDetRequest>`;
+  const det = `<FECAEDetRequest><Concepto>1</Concepto>${doc}<CbteDesde>${nro}</CbteDesde><CbteHasta>${nro}</CbteHasta><CbteFch>${fecha}</CbteFch><ImpTotal>${m.total.toFixed(2)}</ImpTotal><ImpTotConc>0.00</ImpTotConc><ImpNeto>${m.neto.toFixed(2)}</ImpNeto><ImpOpEx>0.00</ImpOpEx><ImpTrib>0.00</ImpTrib><ImpIVA>${m.iva.toFixed(2)}</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz><CondicionIVAReceptorId>${cond}</CondicionIVAReceptorId>${asoc}<Iva><AlicIva><Id>${ivaId}</Id><BaseImp>${m.neto.toFixed(2)}</BaseImp><Importe>${m.iva.toFixed(2)}</Importe></AlicIva></Iva></FECAEDetRequest>`;
   const inner = `<FeCAEReq><FeCabReq><CantReg>1</CantReg><PtoVta>${cfg.ptoVta}</PtoVta><CbteTipo>${tipo}</CbteTipo></FeCabReq><FeDetReq>${det}</FeDetReq></FeCAEReq>`;
   const { xml, errs } = await fe(cfg, "FECAESolicitar", inner, opts);
   const d = tag(xml, "FECAEDetResponse") || "";
@@ -176,6 +188,6 @@ export async function solicitarCae(cfg, { nro, fecha, total, alicuota, tipo = FA
 // Contenido del QR obligatorio (RG 4892).
 export function qrUrl(cfg, f) {
   const fecha = `${f.fecha.slice(0, 4)}-${f.fecha.slice(4, 6)}-${f.fecha.slice(6, 8)}`;
-  const data = { ver: 1, fecha, cuit: Number(String(cfg.cuit).replace(/\D/g, "")), ptoVta: Number(f.pto), tipoCmp: f.tipo, nroCmp: f.nro, importe: f.total, moneda: "PES", ctz: 1, tipoDocRec: 99, nroDocRec: 0, tipoCodAut: "E", codAut: Number(f.cae) };
+  const data = { ver: 1, fecha, cuit: Number(String(cfg.cuit).replace(/\D/g, "")), ptoVta: Number(f.pto), tipoCmp: f.tipo, nroCmp: f.nro, importe: f.total, moneda: "PES", ctz: 1, tipoDocRec: f.receptor ? 80 : 99, nroDocRec: f.receptor ? Number(String(f.receptor.cuit).replace(/\D/g, "")) : 0, tipoCodAut: "E", codAut: Number(f.cae) };
   return "https://www.afip.gob.ar/fe/qr/?p=" + Buffer.from(JSON.stringify(data)).toString("base64");
 }
