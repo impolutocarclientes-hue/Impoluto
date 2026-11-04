@@ -66,6 +66,7 @@ export async function facturaPdf(cfg, emisorIn, f) {
   const bruto = filas.reduce((a, it) => a + Number(it.tot || 0), 0);
   const desc = Math.round((bruto - f.total) * 100) / 100;
   if (desc > 0.009) { y -= 15; txt("Descuentos", M, y); right("- " + pesos(desc), W - M, y); }
+  else if (desc < -0.009) { y -= 15; txt("Otros cargos", M, y); right(pesos(-desc), W - M, y); }
   y -= 10; hr(y);
   y -= 20; right("TOTAL", 470, y, { size: 12, bold: true }); right(pesos(f.total), W - M, y, { size: 12, bold: true });
 

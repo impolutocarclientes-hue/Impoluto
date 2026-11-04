@@ -47,8 +47,10 @@ export function certCorresponde(certPem, keyPem) {
 
 // ---------- SOAP mínimo ----------
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-export const tag = (xml, name) => { const m = String(xml).match(new RegExp(`<(?:\\w+:)?${name}[^>]*>([\\s\\S]*?)</(?:\\w+:)?${name}>`)); return m ? m[1] : null; };
-export const tags = (xml, name) => [...String(xml).matchAll(new RegExp(`<(?:\\w+:)?${name}[^>]*>([\\s\\S]*?)</(?:\\w+:)?${name}>`, "g"))].map((m) => m[1]);
+// Nombre exacto (FchVto no confunde con FchVtoPago) y las etiquetas vacías <X/> no se leen como abiertas.
+const reTag = (name, flags) => new RegExp(`<(?:\\w+:)?${name}(?:\\s[^>]*?)?(?<!/)>([\\s\\S]*?)</(?:\\w+:)?${name}>`, flags);
+export const tag = (xml, name) => { const m = String(xml).match(reTag(name)); return m ? m[1] : null; };
+export const tags = (xml, name) => [...String(xml).matchAll(reTag(name, "g"))].map((m) => m[1]);
 const unesc = (s) => String(s || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 
 async function soap(url, action, body, fetchImpl = fetch) {
@@ -130,14 +132,18 @@ export async function puntosDeVenta(cfg, opts) {
 export async function ultimoNumero(cfg, tipo = FACTURA_B, opts) {
   const { xml, errs } = await fe(cfg, "FECompUltimoAutorizado", `<PtoVta>${cfg.ptoVta}</PtoVta><CbteTipo>${tipo}</CbteTipo>`, opts);
   const n = tag(xml, "CbteNro");
-  if (n == null) throw new Error(errs.join(" · ") || "ARCA no devolvió el último número.");
+  if (errs.length) throw new Error("ARCA: " + errs.join(" · "));
+  if (n == null || !/^\d+$/.test(n.trim())) throw new Error("ARCA no devolvió el último número.");
   return Number(n);
 }
 
 export async function consultar(cfg, nro, tipo = FACTURA_B, opts) {
   const { xml, errs } = await fe(cfg, "FECompConsultar", `<FeCompConsReq><CbteTipo>${tipo}</CbteTipo><CbteNro>${nro}</CbteNro><PtoVta>${cfg.ptoVta}</PtoVta></FeCompConsReq>`, opts);
   const r = tag(xml, "ResultGet");
-  if (!r) return { existe: false, errs };
+  if (!r) {
+    if (errs.some((e) => e.startsWith("602"))) return { existe: false };
+    throw new Error("No se pudo consultar en ARCA: " + (errs.join(" · ") || "respuesta vacía"));
+  }
   return { existe: true, cae: tag(r, "CodAutorizacion"), vto: tag(r, "FchVto"), total: Number(tag(r, "ImpTotal")), fecha: tag(r, "CbteFch"), resultado: tag(r, "Resultado") };
 }
 
@@ -161,8 +167,10 @@ export async function solicitarCae(cfg, { nro, fecha, total, alicuota, tipo = FA
   const { xml, errs } = await fe(cfg, "FECAESolicitar", inner, opts);
   const d = tag(xml, "FECAEDetResponse") || "";
   const obs = tags(tag(d, "Observaciones") || "", "Obs").map((o) => `${tag(o, "Code")}: ${unesc(tag(o, "Msg"))}`);
-  if (tag(d, "Resultado") === "A") return { ok: true, cae: tag(d, "CAE"), vto: tag(d, "CAEFchVto"), obs, ...m };
-  return { ok: false, errs, obs, ...m };
+  const resultado = tag(d, "Resultado") || tag(tag(xml, "FeCabResp") || "", "Resultado");
+  const cae = tag(d, "CAE");
+  if (resultado === "A" && cae && /^\d{14}$/.test(cae.trim())) return { ok: true, resultado, cae: cae.trim(), vto: tag(d, "CAEFchVto"), obs, ...m };
+  return { ok: false, resultado: resultado || null, errs, obs, ...m };
 }
 
 // Contenido del QR obligatorio (RG 4892).

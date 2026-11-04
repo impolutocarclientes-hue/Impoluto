@@ -63,10 +63,7 @@ export async function gql(cfg, query, variables = {}) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const amt = (m) => Number(m && m.shopMoney && m.shopMoney.amount) || 0;
 
-const ORDERS_Q = `query($q:String,$after:String){
-  orders(first:100, after:$after, query:$q, sortKey:UPDATED_AT){
-    pageInfo{ hasNextPage endCursor }
-    nodes{
+const ORDER_FIELDS = `
       id name createdAt processedAt updatedAt cancelledAt test
       displayFinancialStatus paymentGatewayNames sourceName
       totalPriceSet{shopMoney{amount}} currentTotalPriceSet{shopMoney{amount}}
@@ -77,10 +74,19 @@ const ORDERS_Q = `query($q:String,$after:String){
         quantity currentQuantity sku name title variantTitle
         product{ id } variant{ id }
         discountedTotalSet{shopMoney{amount}} originalTotalSet{shopMoney{amount}}
-      } }
-    }
+      } }`;
+const ORDERS_Q = `query($q:String,$after:String){
+  orders(first:100, after:$after, query:$q, sortKey:UPDATED_AT){
+    pageInfo{ hasNextPage endCursor }
+    nodes{ ${ORDER_FIELDS} }
   }
 }`;
+
+// Un pedido recién leído de Shopify (para no facturar con datos viejos: cancelado o devuelto después del último sync).
+export async function fetchOrder(cfg, orderId) {
+  const d = await gql(cfg, `query($id:ID!){ order(id:$id){ ${ORDER_FIELDS} } }`, { id: "gid://shopify/Order/" + orderId });
+  return d && d.order ? compactOrder(d.order) : null;
+}
 
 const gid = (s) => String(s || "").split("/").pop();
 

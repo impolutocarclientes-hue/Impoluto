@@ -32,12 +32,23 @@ process.env.KV_REST_API_TOKEN = "t";
 process.env.APP_PASSWORD = "clave-test";
 
 // ---- ARCA falso ----
-const arcaFake = { last: 41, comps: {}, cortar: false, logins: 0, cmsOk: false };
+const arcaFake = { last: 41, comps: {}, cortar: false, lento: null, consultaFalla: false, logins: 0, cmsOk: false };
+// ---- Shopify falso: el pedido "de verdad" en este momento ----
+const shopOrders = {};
+const raw = (o) => ({ id: "gid://shopify/Order/" + o.id, name: o.n, createdAt: o.c, processedAt: o.c, updatedAt: o.c, cancelledAt: o.x, test: o.t, displayFinancialStatus: o.f, paymentGatewayNames: ["mercado_pago"], sourceName: o.s,
+  totalPriceSet: { shopMoney: { amount: String(o.tot) } }, currentTotalPriceSet: { shopMoney: { amount: String(o.cur) } }, totalDiscountsSet: { shopMoney: { amount: "0" } }, totalShippingPriceSet: { shopMoney: { amount: String(o.ship || 0) } }, totalRefundedSet: { shopMoney: { amount: String(o.ref || 0) } }, discountCodes: [],
+  lineItems: { nodes: o.li.map((l) => ({ quantity: l.q, currentQuantity: l.cq, sku: "", name: l.ti, title: l.ti, variantTitle: l.vt, product: { id: "gid://shopify/Product/1" }, variant: { id: "gid://shopify/ProductVariant/1" }, discountedTotalSet: { shopMoney: { amount: String(l.tot) } }, originalTotalSet: { shopMoney: { amount: String(l.tot) } } })) } });
 const tagv = (x, n) => (String(x).match(new RegExp(`<${n}>([\\s\\S]*?)</${n}>`)) || [])[1];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts = {}) => {
   url = String(url);
   if (url.startsWith(process.env.KV_REST_API_URL)) return realFetch(url, opts);
+  if (url.includes("myshopify.com")) {
+    if (url.includes("access_token")) return new Response(JSON.stringify({ access_token: "shp", scope: "read_orders", expires_in: 86399 }));
+    const { variables } = JSON.parse(opts.body);
+    const id = String(variables.id).split("/").pop();
+    return new Response(JSON.stringify({ data: { order: shopOrders[id] ? raw(shopOrders[id]) : null } }));
+  }
   const body = String(opts.body || "");
   const xml = (inner) => new Response(`<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>${inner}</soap:Body></soap:Envelope>`, { status: 200 });
   if (url.includes("LoginCms")) {
@@ -53,8 +64,10 @@ globalThis.fetch = async (url, opts = {}) => {
   if (action === "FEParamGetPtosVenta") return xml(`<R><ResultGet><PtoVenta><Nro>3</Nro><EmisionTipo>CAE</EmisionTipo><Bloqueado>N</Bloqueado><FchBaja>NULL</FchBaja></PtoVenta></ResultGet></R>`);
   if (action === "FECompUltimoAutorizado") return xml(`<R><CbteNro>${arcaFake.last}</CbteNro></R>`);
   if (action === "FECompConsultar") {
+    if (arcaFake.consultaFalla) return xml(`<R><Errors><Err><Code>500</Code><Msg>Error interno de aplicacion</Msg></Err></Errors></R>`);
     const c = arcaFake.comps[tagv(body, "CbteNro")];
-    return xml(c ? `<R><ResultGet><CbteFch>${c.fecha}</CbteFch><ImpTotal>${c.total}</ImpTotal><CodAutorizacion>${c.cae}</CodAutorizacion><FchVto>20261120</FchVto><Resultado>A</Resultado></ResultGet></R>` : `<R><Errors><Err><Code>602</Code><Msg>Sin resultados</Msg></Err></Errors></R>`);
+    // Como ARCA real: FchVtoPago vacío ANTES de FchVto
+    return xml(c ? `<R><ResultGet><CbteFch>${c.fecha}</CbteFch><FchVtoPago /><ImpTotal>${c.total}</ImpTotal><MonId>PES</MonId><CodAutorizacion>${c.cae}</CodAutorizacion><FchVto>20261120</FchVto><Resultado>A</Resultado></ResultGet></R>` : `<R><Errors><Err><Code>602</Code><Msg>Sin resultados</Msg></Err></Errors></R>`);
   }
   if (action === "FECAESolicitar") {
     const nro = Number(tagv(body, "CbteDesde"));
@@ -63,8 +76,11 @@ globalThis.fetch = async (url, opts = {}) => {
     if (nro !== arcaFake.last + 1) return xml(`<R><FECAEDetResponse><Resultado>R</Resultado></FECAEDetResponse><Errors><Err><Code>10016</Code><Msg>Numero no correlativo</Msg></Err></Errors></R>`);
     const neto = Number(tagv(body, "ImpNeto")), iva = Number(tagv(body, "ImpIVA")), total = Number(tagv(body, "ImpTotal"));
     assert.ok(Math.abs(neto + iva - total) < 0.001);
+    const comp = { total, fecha: tagv(body, "CbteFch"), cae: "7" + String(nro).padStart(13, "0") };
+    // "lento": ARCA todavía está procesando; la consulta inmediata no la encuentra, pero termina autorizándola.
+    if (arcaFake.lento) { arcaFake.lento = () => { arcaFake.last = nro; arcaFake.comps[nro] = comp; }; throw new Error("timeout"); }
     arcaFake.last = nro;
-    arcaFake.comps[nro] = { total, fecha: tagv(body, "CbteFch"), cae: "7" + String(nro).padStart(13, "0") };
+    arcaFake.comps[nro] = comp;
     if (arcaFake.cortar) { arcaFake.cortar = false; throw new Error("socket hang up"); }
     return xml(`<R><FECAEDetResponse><Resultado>A</Resultado><CAE>${arcaFake.comps[nro].cae}</CAE><CAEFchVto>20261120</CAEFchVto></FECAEDetResponse></R>`);
   }
@@ -85,7 +101,14 @@ async function call(method, body, query) {
 }
 
 const hoy = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
-const order = (id, total, extra = {}) => ({ id, n: "#" + id, c: hoy + "T15:00:00Z", x: null, t: false, f: "PAID", tot: total, cur: total, ship: 0, ref: 0, li: [{ ti: "Impoluto · Restaurador", vt: "Default Title", q: 1, cq: 1, tot: total }], ...extra });
+const order = (id, total, extra = {}) => ({ id, n: "#" + id, c: hoy + "T15:00:00Z", x: null, t: false, f: "PAID", s: "web", tot: total, cur: total, ship: 0, ref: 0, li: [{ ti: "Impoluto · Restaurador", vt: "Default Title", q: 1, cq: 1, tot: total }], ...extra });
+
+test("Pedidos que no son del checkout web (ej. Mercado Libre copiado a Shopify) no se facturan", async () => {
+  const { motivoNoFacturable } = await import("../api/factura.js");
+  assert.equal(motivoNoFacturable(order("1", 1000)), null);
+  assert.match(motivoNoFacturable(order("2", 1000, { s: "mercadolibre" })), /No es una venta de la tienda online/);
+  assert.match(motivoNoFacturable(order("3", 1000, { s: "1234567" })), /No es una venta/);
+});
 
 test("CUIT y montos de factura B", () => {
   assert.ok(A.cuitValido("20-11111111-2"));
@@ -96,6 +119,9 @@ test("CUIT y montos de factura B", () => {
 
 test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t) => {
   t.after(() => srv.close());
+  const { SECRETS } = await import("../api/_lib.js");
+  await redis.hset(SECRETS, { shopify: JSON.stringify({ shop: "prueba.myshopify.com", clientId: "c", clientSecret: "s" }) });
+  ["1001", "1002", "1003", "1006", "1007", "1008"].forEach((id, i) => (shopOrders[id] = order(id, [42990, 56990, 67990, 42990, 56990, 42990][i])));
   await redis.hset(ORDERS, {
     "1001": JSON.stringify(order("1001", 42990)), "1002": JSON.stringify(order("1002", 56990)), "1003": JSON.stringify(order("1003", 67990)),
     "1004": JSON.stringify(order("1004", 42990, { f: "PENDING" })), "1005": JSON.stringify(order("1005", 42990, { x: hoy + "T16:00:00Z" })),
@@ -176,6 +202,58 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
   assert.equal(r.body.resultados[0].ok, false);
   assert.match(r.body.resultados[0].error, /otro sistema/);
   assert.equal(arcaFake.last, 10);
+  arcaFake.last = 3; delete arcaFake.comps[10];
+
+  // Sincronizado como pagado, pero en Shopify ya lo cancelaron: no se factura
+  await redis.hset(ORDERS, { "1007": JSON.stringify(order("1007", 56990)) });
+  shopOrders["1007"] = order("1007", 56990, { x: hoy + "T18:00:00Z" });
+  r = await call("POST", { action: "emitir", ids: ["1007"] });
+  assert.equal(r.body.resultados[0].ok, false);
+  assert.match(r.body.resultados[0].error, /cancelado/);
+  assert.equal(arcaFake.last, 3);
+
+  // ARCA lento: no contesta a tiempo y la consulta inmediata no la encuentra. NO se borra: queda «revisar».
+  arcaFake.lento = true;
+  await redis.hset(ORDERS, { "1008": JSON.stringify(order("1008", 42990)) });
+  r = await call("POST", { action: "emitir", ids: ["1008"] });
+  assert.equal(r.body.resultados[0].ok, false);
+  assert.match(r.body.resultados[0].error, /Se cortó/);
+  r = await call("GET");
+  assert.equal(r.body.facturas.find((f) => f.orderId === "1008").estado, "revisar");
+  arcaFake.lento(); arcaFake.lento = null; // ARCA termina de autorizarla (número 4)
+  // Mientras hay una pendiente no se puede cambiar el punto de venta
+  r = await call("POST", { action: "config", ptoVta: 7 });
+  assert.match(r.body.error, /medio emitir/);
+  // Si la consulta a ARCA falla, no se toca nada ni se emite
+  arcaFake.consultaFalla = true;
+  r = await call("POST", { action: "emitir", ids: ["1008"] });
+  assert.equal(r.status, 400);
+  assert.equal(arcaFake.last, 4);
+  arcaFake.consultaFalla = false;
+  // Próxima emisión: se resuelve sola como emitida, con el vencimiento bien leído, sin duplicar
+  r = await call("POST", { action: "emitir", ids: ["1008"] });
+  assert.equal(r.body.resultados[0].ya, true);
+  const f8 = r.body.resultados[0].f;
+  assert.equal(f8.estado, "emitida"); assert.equal(f8.nro, 4); assert.equal(f8.vto, "20261120");
+  assert.ok(f8.iva > 0 && f8.neto > 0);
+  assert.equal(arcaFake.last, 4);
+
+  // Se cortó y ARCA de verdad NO la autorizó: hasta 5 minutos no se da por perdida; después se libera y se emite una sola vez
+  arcaFake.lento = true;
+  await redis.hset(ORDERS, { "1009": JSON.stringify(order("1009", 42990)) }); shopOrders["1009"] = order("1009", 42990);
+  r = await call("POST", { action: "emitir", ids: ["1009"] });
+  assert.equal(r.body.resultados[0].ok, false);
+  arcaFake.lento = null; // nunca la autoriza
+  r = await call("POST", { action: "emitir", ids: ["1009"] });
+  assert.equal(r.status, 400); assert.match(r.body.error, /Esperá/);
+  assert.equal(arcaFake.last, 4);
+  const key = "impoluto:facturas:20111111112:prod";
+  const pv = (await redis.hgetall(key))["1009"]; const pend = typeof pv === "string" ? JSON.parse(pv) : pv;
+  await redis.hset(key, { "1009": JSON.stringify({ ...pend, sentAt: new Date(Date.now() - 6 * 60e3).toISOString() }) });
+  r = await call("POST", { action: "emitir", ids: ["1009"] });
+  assert.equal(r.body.resultados[0].ok, true, JSON.stringify(r.body));
+  assert.equal(r.body.resultados[0].f.nro, 5);
+  assert.equal(arcaFake.last, 5);
 
   // 7) El login a ARCA se reutiliza (ARCA no da otro mientras el anterior sigue vigente)
   assert.equal(arcaFake.logins, 1);
