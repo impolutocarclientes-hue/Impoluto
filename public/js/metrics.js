@@ -457,7 +457,7 @@ export function stock(ctx, hoy) {
 
 // ---------- Stock (seguimiento, proyección y control) ----------
 // Productos que no llevan stock: digitales, seguros de envío y los que el usuario marque.
-export const sinStock = (p, titulo = "") => !!(p && (p.sinStock === true || (p.sinStock !== false && (p.tipo === "digital" || /protecci[oó]n de env[ií]o|seguro de env/i.test(p.nombre || titulo)))));
+export const sinStock = (p, titulo = "") => !!(p && (p.sinStock === true || (p.sinStock !== false && (p.tipo === "digital" || /protecci[oó]n de env[ií]o|seguro de env|e-?book|\bpdf\b|gu[ií]a digital|curso/i.test(p.nombre || titulo)))));
 export const STOCK_DEF = { entregaDias: 15, coberturaDias: 30, alertaDias: 7 };
 
 // Unidades que salieron por día (pedidos pagados, sin cancelados ni devueltos), por producto.
