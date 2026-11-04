@@ -124,3 +124,47 @@ test("Anuncios: solo campañas de Impoluto (fuera Valmora)", () => {
   const ads = [{ can: "Impoluto chapa 24/10/2026", sp: 10 }, { can: "Valmora Gotero lumbar 4/10/2026", sp: 5 }, { can: "Testeo valmora crema azul", sp: 3 }, { can: "IMPOLUTO escala", sp: 2 }];
   assert.deepEqual(M.soloCampanasTienda(ads).map((a) => a.sp), [10, 2]);
 });
+
+test("Stock: conteo, ventas, entradas, conteos, reservas, ritmo y cuándo pedir", () => {
+  const hoy = "2026-11-20";
+  const li = (pid, q, extra = {}) => ({ pid, vid: "v", sku: "", ti: pid === "R" ? "Restaurador" : pid === "E" ? "E-book" : "Protección de envío", vt: "", q, cq: q, tot: 1000 * q, orig: 1000 * q, ...extra });
+  const ord = (id, day, items, extra = {}) => ({ id, n: "#" + id, c: day + "T15:00:00Z", p: day + "T15:00:00Z", x: null, t: false, f: "PAID", g: "mercado_pago", s: "web", tot: 1, cur: 1, disc: 0, ship: 0, ref: 0, dc: [], li: items, ...extra });
+  const orders = [];
+  // 2 unidades por día del 1 al 19 de noviembre (38), más un e-book y una protección de envío
+  for (let d = 1; d <= 19; d++) orders.push(ord("o" + d, `2026-11-${String(d).padStart(2, "0")}`, [li("R", 2), li("E", 1), li("P", 1)]));
+  orders.push(ord("x1", "2026-11-10", [li("R", 5)], { x: "2026-11-10T16:00:00Z" })); // cancelado: no cuenta
+  orders.push(ord("p1", "2026-11-19", [li("R", 3)], { f: "PENDING" }));          // sin pagar: reservado
+  orders.push(ord("d1", "2026-11-12", [li("R", 2, { cq: 1 })]));                  // devolvió 1 de 2: cuenta 1
+  orders.push(ord("t1", "2026-11-12", [li("R", 9)], { t: true }));                // prueba: no cuenta
+  const prods = { R: { nombre: "Restaurador", stock: 100, stockFecha: "2026-11-05", costo: 6200, entregaDias: 15, coberturaDias: 30 }, E: { nombre: "E-book", tipo: "digital" }, P: { nombre: "Protección de envío" } };
+  const stockMovs = [
+    { pid: "R", fecha: "2026-11-10", tipo: "ingreso", cant: 50 },
+    { pid: "R", fecha: "2026-11-15", tipo: "ajuste", cant: -3 },
+    { pid: "R", fecha: "2026-11-16", tipo: "salida", cant: 2 },
+    { pid: "R", fecha: "2026-11-01", tipo: "ingreso", cant: 999 },                // antes del conteo: no cuenta
+  ];
+  const L = M.stockDetalle({ orders, prods, stockMovs }, hoy, ["2026-11-01", "2026-11-10"]);
+  const r = L.find((x) => x.pid === "R");
+  // vendidas desde el 5: días 5..19 = 15 días × 2 = 30, + 1 del pedido con devolución = 31
+  assert.equal(r.vendidas, 31);
+  assert.equal(r.actual, 100 + 50 - 3 - 2 - 31);
+  assert.equal(r.reservadas, 3);
+  assert.equal(r.r7, 2); // 13..19 → 14 unidades / 7
+  assert.equal(Math.round(r.dias), Math.round(114 / 2));
+  assert.equal(r.quiebre, "2027-01-16");
+  assert.equal(r.pedir.cant, 2 * 45 - 114 > 0 ? 2 * 45 - 114 : 0);
+  assert.equal(r.estadoStock, "bien");
+  assert.equal(r.valor, 114 * 6200);
+  assert.equal(r.enRango, 20); // del 1 al 10: 10 días × 2 (el cancelado no cuenta)
+  assert.equal(r.vendMes, 39);
+  // proyección: 39 + 2 por día × 10 días que faltan (21..30) + 2 de hoy (todavía sin ventas)
+  assert.equal(r.proyMes, 39 + 2 * 10 + 2);
+  assert.ok(L.find((x) => x.pid === "E").sinStock);
+  assert.ok(L.find((x) => x.pid === "P").sinStock);
+  // Se termina: con 10 unidades y 2 por día quedan 5 días → crítico y hay que pedir ya
+  const L2 = M.stockDetalle({ orders, prods: { ...prods, R: { ...prods.R, stock: 0 } }, stockMovs: stockMovs.filter((m) => m.cant !== 50 && m.cant !== 999).concat([{ pid: "R", fecha: "2026-11-18", tipo: "ingreso", cant: 46 }]) }, hoy);
+  const r2 = L2.find((x) => x.pid === "R");
+  assert.equal(r2.actual, 0 + 46 - 3 - 2 - 31);
+  assert.equal(r2.estadoStock, "critico");
+  assert.equal(r2.pedir.ya, true);
+});

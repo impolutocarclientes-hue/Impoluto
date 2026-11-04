@@ -455,6 +455,78 @@ export function stock(ctx, hoy) {
   return out;
 }
 
+// ---------- Stock (seguimiento, proyección y control) ----------
+// Productos que no llevan stock: digitales, seguros de envío y los que el usuario marque.
+export const sinStock = (p, titulo = "") => !!(p && (p.sinStock === true || (p.sinStock !== false && (p.tipo === "digital" || /protecci[oó]n de env[ií]o|seguro de env/i.test(p.nombre || titulo)))));
+export const STOCK_DEF = { entregaDias: 15, coberturaDias: 30, alertaDias: 7 };
+
+// Unidades que salieron por día (pedidos pagados, sin cancelados ni devueltos), por producto.
+export function unidadesPorDia(orders) {
+  const out = {};
+  (orders || []).forEach((o) => {
+    if (o.t || estado(o) !== "pagado") return;
+    const d = dayOf(o.c);
+    o.li.forEach((l) => { if (!l.pid || !(n(l.cq) > 0)) return; const m = (out[l.pid] = out[l.pid] || {}); m[d] = (m[d] || 0) + n(l.cq); });
+  });
+  return out;
+}
+
+// Por producto: stock actual = conteo inicial + entradas/ajustes/salidas cargadas − unidades vendidas desde el conteo.
+// El ritmo sale de los últimos 7 días completos (hoy todavía no terminó) y se muestra también el de 30.
+export function stockDetalle(ctx, hoy, rango) {
+  const porDia = unidadesPorDia(ctx.orders);
+  const movs = ctx.stockMovs || [];
+  const titulos = {};
+  (ctx.orders || []).forEach((o) => o.li.forEach((l) => { if (l.pid && !titulos[l.pid]) titulos[l.pid] = l.ti; }));
+  const pids = [...new Set([...Object.keys(titulos), ...Object.keys(ctx.prods || {})])];
+  const ayer = addDays(hoy, -1);
+  const suma = (m, a, b) => Object.entries(m || {}).reduce((t, [d, u]) => (d >= a && d <= b ? t + u : t), 0);
+  const mesIni = hoy.slice(0, 8) + "01";
+  const diasMes = daysInMonth(hoy);
+  const quedanMes = diasMes - Number(hoy.slice(8, 10)) + 1; // incluye hoy
+  const mesPasIni = addDays(mesIni, -1).slice(0, 8) + "01", mesPasFin = addDays(mesIni, -1);
+  return pids.map((pid) => {
+    const p = (ctx.prods || {})[pid] || {};
+    const nombre = p.nombre || titulos[pid] || pid;
+    const m = porDia[pid] || {};
+    const r7 = suma(m, addDays(hoy, -7), ayer) / 7, r30 = suma(m, addDays(hoy, -30), ayer) / 30;
+    const ritmo = r7 || r30;
+    const vendMes = suma(m, mesIni, hoy);
+    const out = {
+      pid, nombre, sinStock: sinStock(p, titulos[pid]), costo: p.costo == null || p.costo === "" ? null : n(p.costo),
+      r7, r30, ritmo, vendMes, mesPasado: suma(m, mesPasIni, mesPasFin),
+      // Lo vendido en el mes + el ritmo por los días que faltan (hoy cuenta lo que falte para llegar al ritmo).
+      proyMes: Math.round(vendMes + ritmo * (quedanMes - 1) + Math.max(0, ritmo - suma(m, hoy, hoy))),
+      enRango: rango ? suma(m, rango[0], rango[1]) : null,
+      serie: eachDay(addDays(hoy, -29), hoy).map((d) => ({ d, u: m[d] || 0 })),
+      entregaDias: n(p.entregaDias) || STOCK_DEF.entregaDias, coberturaDias: n(p.coberturaDias) || STOCK_DEF.coberturaDias, alertaDias: n(p.alertaDias) || STOCK_DEF.alertaDias,
+      conteo: null, actual: null, reservadas: 0, dias: null, quiebre: null, pedir: null, estadoStock: "sin-conteo",
+    };
+    if (out.sinStock) { out.estadoStock = "no-lleva"; return out; }
+    if (p.stock == null || p.stock === "" || !p.stockFecha) return out;
+    const desde = p.stockFecha;
+    const mv = movs.filter((x) => x.pid === pid && x.fecha >= desde);
+    const entradas = mv.filter((x) => x.tipo === "ingreso").reduce((t, x) => t + n(x.cant), 0);
+    const ajustes = mv.filter((x) => x.tipo === "ajuste").reduce((t, x) => t + n(x.cant), 0);
+    const salidas = mv.filter((x) => x.tipo === "salida").reduce((t, x) => t + n(x.cant), 0);
+    const vendidas = suma(m, desde, hoy);
+    // Pedidos todavía sin pagar: no se descuentan, pero se muestran como reservados.
+    let reservadas = 0;
+    (ctx.orders || []).forEach((o) => { if (!o.t && estado(o) === "pendiente" && dayOf(o.c) >= desde) o.li.forEach((l) => { if (l.pid === pid) reservadas += n(l.cq); }); });
+    const actual = n(p.stock) + entradas + ajustes - salidas - vendidas;
+    Object.assign(out, { conteo: { cant: n(p.stock), fecha: desde }, entradas, ajustes, salidas, vendidas, reservadas, actual });
+    out.valor = out.costo != null ? Math.max(0, actual) * out.costo : null;
+    if (ritmo > 0) {
+      out.dias = Math.max(0, actual) / ritmo;
+      out.quiebre = addDays(hoy, Math.floor(out.dias));
+      const sugerido = Math.ceil(ritmo * (out.entregaDias + out.coberturaDias) - Math.max(0, actual));
+      out.pedir = { ya: out.dias <= out.entregaDias, cuando: addDays(hoy, Math.max(0, Math.floor(out.dias - out.entregaDias))), cant: Math.max(0, sugerido) };
+    }
+    out.estadoStock = actual <= 0 ? "sin-stock" : out.dias != null && out.dias <= out.alertaDias ? "critico" : out.pedir && out.pedir.ya ? "pedir" : "bien";
+    return out;
+  }).sort((a, b) => (a.sinStock - b.sinStock) || (b.r30 - a.r30));
+}
+
 // ---------- Caja (semana por semana) ----------
 export function caja(ctx, hoy, semanas = 8, CAJA = "Caja Impoluto") {
   const cfg = costosCfg(ctx.costos);

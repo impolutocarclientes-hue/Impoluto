@@ -35,6 +35,7 @@ const ICON = {
   cfg: '<path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.1a1.6 1.6 0 00-2.7-1.1l-.1.1a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 003 15.4H3a2 2 0 110-4h.1a1.6 1.6 0 001.1-2.7l-.1-.1a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 009.6 4.6V4.5a2 2 0 114 0v.1a1.6 1.6 0 002.7 1.1l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 001.1 2.7h.1a2 2 0 110 4h-.1a1.6 1.6 0 00-1.8.3z"/>',
   sync: '<path d="M21 12a9 9 0 01-15.5 6.3M3 12A9 9 0 0118.5 5.7M18 2v4h-4M6 22v-4h4"/>',
   spark: '<path d="M4 18l5-6 4 3 7-9"/>',
+  box: '<path d="M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10"/>',
 };
 const svg = (k, cls = "") => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
 const SRC = { shopify: '<svg class="src" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="#95bf47"/></svg>', meta: '<svg class="src" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="#0082fb"/></svg>', mix: '<svg class="src" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="#dc327d"/></svg>' };
@@ -69,7 +70,7 @@ const socios = () => (Array.isArray(S.app.socios) && S.app.socios.length >= 2 ? 
 const cats = () => (Array.isArray(S.app.cats) && S.app.cats.length ? S.app.cats : DEF_CATS);
 const catOf = (g) => cats().find((c) => c.id === g.catId) || cats().find((c) => c.name === g.cat) || { id: "otros", name: g.cat || "Otros", color: "#8C7F72" };
 const cfg = () => M.costosCfg(S.costos);
-const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: S.costos, prods: S.prods, gastos: S.gastos, movs: S.movs });
+const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: S.costos, prods: S.prods, gastos: S.gastos, movs: S.movs, stockMovs: S.stockMovs || [] });
 const money = (v) => (S.cur === "USD" ? usd(nn(v) / nn(cfg().dolar || 1)) : ars(v));
 
 function rangeOf(p) {
@@ -125,6 +126,7 @@ async function sync(which = "all", extra = {}) {
 function subscribe() {
   db.collection("gastos").onSnapshot((s) => { S.gastos = s.docs.map((d) => ({ id: d.id, ...d.data() })).filter((g) => g.fecha); schedule(); });
   db.collection("movimientos").onSnapshot((s) => { S.movs = s.docs.map((d) => ({ id: d.id, ...d.data() })); schedule(); });
+  db.collection("stockmov").onSnapshot((s) => { S.stockMovs = s.docs.map((d) => ({ id: d.id, ...d.data() })).filter((m) => m.pid && m.fecha); schedule(); });
   db.collection("prods").onSnapshot((s) => { const o = {}; s.docs.forEach((d) => (o[d.id] = d.data())); S.prods = o; schedule(); });
   db.collection("escenarios").onSnapshot((s) => { S.escenarios = s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))); schedule(); });
   db.doc("config/app").onSnapshot((d) => { S.app = d.exists ? d.data() : {}; schedule(); });
@@ -187,7 +189,7 @@ function block(id, title, inner, right = "") { return `<section class="block" id
 const VIEWS = [
   ["dashboard", "Tu plata", "dash"], ["anuncios", "Anuncios", "ads"], ["caja", "Caja", "caja"],
   ["impuestos", "Impuestos", "imp"], ["socios", "Socios", "socios"], ["gastos", "Gastos", "gastos"],
-  ["facturas", "Facturación", "imp"], ["calculadora", "Calculadora", "calc"], ["config", "Configuración", "cfg"],
+  ["stock", "Stock", "box"], ["facturas", "Facturación", "imp"], ["calculadora", "Calculadora", "calc"], ["config", "Configuración", "cfg"],
 ];
 function sideHTML() {
   const c = S.conn || {};
@@ -222,6 +224,10 @@ function banners() {
     if (left <= 10) out.push(`<p class="banner warn">El acceso a Meta vence en ${left} días. Generá uno nuevo y pegalo en Configuración → Conexiones.</p>`);
   }
   const sinCosto = productosVistos().filter((p) => sinCostoCargado(p.pid) && p.ventas > 0);
+  if (S.loaded && S.view === "dashboard") {
+    const urg = M.stockDetalle(ctx(), today).filter((x) => x.estadoStock === "sin-stock" || x.estadoStock === "critico");
+    if (urg.length) out.push(`<p class="banner bad">Stock: ${urg.map((x) => `${esc(x.nombre)} ${x.estadoStock === "sin-stock" ? "sin stock" : "alcanza " + int(x.dias) + " días"}`).join(" · ")}. <a href="#" data-nav="stock">Ver stock</a></p>`);
+  }
   if (S.loaded && sinCosto.length) out.push(`<p class="banner warn">Falta el costo de ${sinCosto.length === 1 ? esc(sinCosto[0].titulo) : sinCosto.length + " productos"}: la ganancia sale más alta de lo que es. <a href="#" data-nav="config" data-cfgsub="productos">Cargalo acá</a>.</p>`);
   if (S.loaded && !nn(cfg().envioPedido) && !nn(cfg().armadoPedido) && !S.costos.envioOk) out.push('<p class="banner warn">Todavía no cargaste cuánto te sale el envío y el armado de cada pedido. Si no pagás nada de eso, poné 0 en <a href="#" data-nav="config" data-cfgsub="costos">Costos y comisiones</a>.</p>');
   return out.join("");
@@ -659,7 +665,7 @@ function viewConfig() {
   }
   if (S.cfgSub === "productos") {
     const ps = productosVistos();
-    const st = M.stock(ctx(), today);
+    const st = M.stockDetalle(ctx(), today).filter((x) => x.conteo);
     h += ps.length ? `<p class="note">Los productos salen solos de tus ventas de Shopify. Cargá cuánto te cuesta cada unidad (lo que le pagás al proveedor). "Agregado" es un upsell, order bump o seguro de envío: no paga envío ni anuncio aparte.</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="r">Vendidas</th><th>Costo por unidad</th><th>Tipo</th><th>Palabra de la campaña ${tip("Si el nombre de la campaña de Meta tiene esta palabra, sus anuncios se le asignan a este producto.")}</th><th>Stock ${tip("Cuántas unidades tenías en esa fecha. Descontamos solas las que se venden después.")}</th><th>Desde</th><th class="r">Te alcanza</th></tr></thead><tbody>
       ${ps.map((p) => { const pc = S.prods[p.pid] || {}; const s = st.find((x) => x.pid === p.pid); return `<tr><td style="white-space:normal;min-width:180px">${esc(p.titulo)}</td><td class="r">${int(p.unidades)}</td>
       <td><div class="prefix" style="width:130px"><em>$</em><input class="in" type="number" data-prod="${esc(p.pid)}" data-k="costo" value="${esc(pc.costo ?? "")}"></div></td>
@@ -667,7 +673,7 @@ function viewConfig() {
       <td><input class="in" style="width:130px" data-prod="${esc(p.pid)}" data-k="clave" value="${esc(pc.clave ?? "")}" placeholder="ej: impoluto"></td>
       <td><input class="in" style="width:90px" type="number" data-prod="${esc(p.pid)}" data-k="stock" value="${esc(pc.stock ?? "")}"></td>
       <td><input class="in" style="width:140px" type="date" data-prod="${esc(p.pid)}" data-k="stockFecha" value="${esc(pc.stockFecha ?? "")}"></td>
-      <td class="r">${s ? `${int(s.actual)} u.${s.dias != null ? ` · <span class="${s.dias < 7 ? "down" : ""}">${int(s.dias)} días</span>` : ""}` : "–"}</td></tr>`; }).join("")}</tbody></table></div>` : '<div class="card empty">Cuando conectes Shopify y entren ventas, acá aparecen tus productos para cargarles el costo.</div>';
+      <td class="r">${s ? `${int(s.actual)} u.${s.dias != null ? ` · <span class="${s.dias <= s.alertaDias ? "down" : ""}">${int(s.dias)} días</span>` : ""}` : "–"}</td></tr>`; }).join("")}</tbody></table></div>` : '<div class="card empty">Cuando conectes Shopify y entren ventas, acá aparecen tus productos para cargarles el costo.</div>';
   }
   if (S.cfgSub === "fijos") {
     const fijos = c.fijos || [];
@@ -770,6 +776,119 @@ function csvGastos() {
   download(`gastos_${S.gastosMes}.csv`, rows);
 }
 
+
+// ============ Stock ============
+const fechaCorta = (d) => new Date(d + "T12:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "short" });
+const ESTADO_STOCK = {
+  "sin-stock": ["bad", "Sin stock"], critico: ["bad", "Se termina"], pedir: ["warn", "Pedí ya"], bien: ["good", "Bien"], "sin-conteo": ["", "Falta el conteo"],
+};
+function barras(serie) {
+  const max = Math.max(1, ...serie.map((x) => x.u));
+  const w = 100 / serie.length;
+  return `<svg viewBox="0 0 100 34" preserveAspectRatio="none" style="width:100%;height:70px;display:block">${serie.map((x, i) => `<rect x="${i * w + w * 0.15}" y="${34 - (x.u / max) * 32}" width="${w * 0.7}" height="${(x.u / max) * 32}" fill="var(--pink)" opacity="${i === serie.length - 1 ? 0.45 : 0.9}"><title>${fechaCorta(x.d)}: ${x.u} u.</title></rect>`).join("")}</svg>
+    <div class="small muted" style="display:flex;justify-content:space-between"><span>${fechaCorta(serie[0].d)}</span><span>hoy</span></div>`;
+}
+function viewStock() {
+  if (!S.loaded) return `<div class="content"><div class="card empty">Cargando…</div></div>`;
+  const [from, to] = [S.from, S.to];
+  const lista = M.stockDetalle(ctx(), today, [from, to]);
+  const con = lista.filter((x) => !x.sinStock);
+  const sin = lista.filter((x) => x.sinStock);
+  let h = `<div class="bar2"><div class="chips">${PRESETS.map(([k, l]) => `<button class="chip" data-preset="${k}" aria-pressed="${S.preset === k}">${l}</button>`).join("")}</div></div><div class="content">`;
+  const urg = con.filter((x) => ["sin-stock", "critico", "pedir"].includes(x.estadoStock));
+  urg.forEach((x) => (h += `<p class="banner ${x.estadoStock === "pedir" ? "warn" : "bad"}"><b>${esc(x.nombre)}:</b> ${x.estadoStock === "sin-stock" ? "te quedaste sin stock según la cuenta. Si no es así, hacé un conteo." : `te quedan ${int(x.actual)} unidades, alcanzan ${int(x.dias)} días (hasta el ${fechaCorta(x.quiebre)}). Tu proveedor tarda ${x.entregaDias} días: pedí ${int(x.pedir.cant)} unidades ahora.`}</p>`));
+
+  // Tarjetas por producto
+  h += `<div style="display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr))">`;
+  for (const x of con) {
+    const [tone, txt] = ESTADO_STOCK[x.estadoStock];
+    h += `<div class="card" style="display:grid;gap:12px"><div style="display:flex;justify-content:space-between;gap:10px;align-items:start"><h3 style="margin:0">${esc(x.nombre)}</h3><span class="tag ${tone}">${txt}</span></div>`;
+    if (!x.conteo) {
+      h += `<p class="note" style="margin:0">Para saber cuánto te queda, contá cuántas unidades tenés hoy. Desde ahí la app descuenta sola cada venta.</p>
+        <div class="actions"><input class="in" type="number" min="0" id="stk-ini-${esc(x.pid)}" placeholder="Unidades que tenés hoy" style="max-width:220px"><button class="ctl pri" data-stk="inicial" data-pid="${esc(x.pid)}">Guardar</button></div>`;
+    } else {
+      h += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+        <div><div class="small muted">Te quedan</div><div style="font-size:26px;font-weight:600">${int(x.actual)} <span class="small muted">u.</span></div>${x.reservadas ? `<div class="small muted">+ ${int(x.reservadas)} en pedidos sin pagar</div>` : ""}</div>
+        <div><div class="small muted">Te alcanza</div><div style="font-size:26px;font-weight:600">${x.dias != null ? int(x.dias) + ' <span class="small muted">días</span>' : "–"}</div>${x.quiebre ? `<div class="small muted">hasta el ${fechaCorta(x.quiebre)}</div>` : ""}</div>
+        <div><div class="small muted">Vendés por día</div><div style="font-size:26px;font-weight:600">${x.ritmo ? (Math.round(x.ritmo * 10) / 10).toString().replace(".", ",") : "0"}</div><div class="small muted">30 días: ${(Math.round(x.r30 * 10) / 10).toString().replace(".", ",")}/día</div></div></div>`;
+      if (x.pedir) h += `<p style="margin:0">${x.pedir.ya ? `<b class="down">Pedí ya ${int(x.pedir.cant)} unidades.</b>` : `Próximo pedido: <b>el ${fechaCorta(x.pedir.cuando)}</b>, unas <b>${int(x.pedir.cant)} unidades</b>.`} <span class="muted small">Cuenta: lo que vendés en ${x.entregaDias} días que tarda en llegar + ${x.coberturaDias} días más, menos lo que te queda.</span></p>`;
+      h += `<div class="small muted">Desde el conteo del ${fechaCorta(x.conteo.fecha)} (${int(x.conteo.cant)} u.): ${x.entradas ? `+${int(x.entradas)} entraron · ` : ""}${x.salidas ? `−${int(x.salidas)} salidas · ` : ""}${x.ajustes ? `${x.ajustes > 0 ? "+" : ""}${int(x.ajustes)} por conteo · ` : ""}−${int(x.vendidas)} vendidas${x.valor != null ? ` · stock valuado en ${ars(x.valor)}` : ""}</div>`;
+      h += `<div class="actions"><button class="ctl pri" data-stk="ingreso" data-pid="${esc(x.pid)}">+ Entró mercadería</button><button class="ctl" data-stk="conteo" data-pid="${esc(x.pid)}">Conté el stock</button><button class="ctl" data-stk="salida" data-pid="${esc(x.pid)}">Salida (regalo, rotura)</button></div>`;
+    }
+    h += `<div><div class="small muted" style="margin-bottom:4px">Unidades vendidas por día · últimos 30 días</div>${barras(x.serie)}</div>
+      <details><summary class="small muted" style="cursor:pointer">Ajustes de este producto</summary><div class="form" style="margin-top:8px">
+        <label class="f"><span>Días que tarda tu proveedor</span><input class="in" type="number" min="0" data-stkcfg="${esc(x.pid)}" data-k="entregaDias" value="${esc(x.entregaDias)}"></label>
+        <label class="f"><span>Días de stock que querés tener</span><input class="in" type="number" min="0" data-stkcfg="${esc(x.pid)}" data-k="coberturaDias" value="${esc(x.coberturaDias)}"></label>
+        <label class="f"><span>Avisame cuando queden menos de (días)</span><input class="in" type="number" min="0" data-stkcfg="${esc(x.pid)}" data-k="alertaDias" value="${esc(x.alertaDias)}"></label>
+        <label class="f" style="align-self:end"><span><input type="checkbox" data-stkcfg="${esc(x.pid)}" data-k="sinStock"> No lleva stock</span></label></div></details></div>`;
+  }
+  h += `</div>`;
+
+  // Unidades vendidas y proyección
+  h += block("unidades", "Unidades vendidas", `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="r">En estas fechas</th><th class="r">Este mes</th><th class="r">Proyección del mes ${tip("Lo vendido en el mes más lo que vendés por día (últimos 7 días) por los días que faltan.")}</th><th class="r">Mes pasado</th><th class="r">Por día (7 / 30 días)</th></tr></thead><tbody>
+    ${lista.map((x) => `<tr><td>${esc(x.nombre)}${x.sinStock ? ' <span class="muted small">(no lleva stock)</span>' : ""}</td><td class="r">${int(x.enRango)}</td><td class="r">${int(x.vendMes)}</td><td class="r"><b>${int(x.proyMes)}</b></td><td class="r">${int(x.mesPasado)}</td><td class="r">${(Math.round(x.r7 * 10) / 10).toString().replace(".", ",")} / ${(Math.round(x.r30 * 10) / 10).toString().replace(".", ",")}</td></tr>`).join("")}</tbody></table></div>
+    <p class="note">Cuenta las unidades de pedidos pagados (sin cancelados ni devueltos), incluidas las que van de regalo en los packs.</p>`);
+
+  // Historial de movimientos
+  const mv = (S.stockMovs || []).slice().sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.at).localeCompare(String(a.at))).slice(0, 60);
+  const nom = Object.fromEntries(lista.map((x) => [x.pid, x.nombre]));
+  const TIPO = { ingreso: "Entró mercadería", ajuste: "Conteo", salida: "Salida" };
+  h += block("movstock", "Movimientos de stock", mv.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Producto</th><th>Qué</th><th class="r">Unidades</th><th>Nota</th><th></th></tr></thead><tbody>
+    ${mv.map((m) => `<tr><td>${esc(fechaCorta(m.fecha))}</td><td>${esc(nom[m.pid] || m.pid)}</td><td>${esc(TIPO[m.tipo] || m.tipo)}</td><td class="r">${m.tipo === "salida" ? "−" : m.cant > 0 && m.tipo === "ajuste" ? "+" : ""}${int(m.cant)}</td><td class="muted" style="white-space:normal">${esc(m.nota || "")}</td><td class="r"><button class="ctl" data-stk="borrar" data-id="${esc(m.id)}">Borrar</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="card empty">Cuando entre mercadería o hagas un conteo, queda registrado acá.</div>`);
+  if (sin.length) h += `<p class="note">No llevan stock: ${sin.map((x) => `${esc(x.nombre)} <a href="#" data-stk="lleva" data-pid="${esc(x.pid)}">(sí lleva)</a>`).join(" · ")}</p>`;
+  return h + "</div>";
+}
+
+function stockAccion(acc, pid, id) {
+  const x = pid ? M.stockDetalle(ctx(), today).find((y) => y.pid === pid) : null;
+  if (acc === "inicial") {
+    const el = document.getElementById("stk-ini-" + pid);
+    const v = el && el.value.trim();
+    if (v === "" || !(Number(v) >= 0)) return toast("Poné cuántas unidades tenés hoy.");
+    const prev = S.prods[pid] || {};
+    const next = { ...prev, nombre: prev.nombre || (x && x.nombre) || "", stock: Number(v), stockFecha: today };
+    S.prods = { ...S.prods, [pid]: next };
+    return db.doc("prods/" + pid).set(next).then(() => { toast("Stock guardado: desde hoy se descuenta solo"); render(); });
+  }
+  if (acc === "lleva") { const prev = S.prods[pid] || {}; const next = { ...prev, nombre: prev.nombre || (x && x.nombre) || "", sinStock: false }; S.prods = { ...S.prods, [pid]: next }; return db.doc("prods/" + pid).set(next).then(render); }
+  if (acc === "borrar") return db.doc("stockmov/" + id).delete().then(() => toast("Movimiento borrado"));
+  const titulos = { ingreso: "Entró mercadería", conteo: "Conté el stock", salida: "Salida de stock" };
+  const ayuda = {
+    ingreso: "Las unidades que llegaron del proveedor. Se suman al stock.",
+    conteo: `Contá las unidades que tenés de verdad. La app calcula ${int(x.actual)}: la diferencia queda registrada como ajuste.`,
+    salida: "Unidades que salieron sin venderse: regalos, muestras, roturas, uso propio. Se restan.",
+  };
+  openModal(`<h2>${titulos[acc]} · ${esc(x.nombre)}</h2><p class="note">${ayuda[acc]}</p><div class="form">
+    <label class="f"><span>Fecha</span><input class="in" type="date" id="sm-fecha" value="${today}"></label>
+    <label class="f"><span>${acc === "conteo" ? "Unidades que contaste" : "Unidades"}</span><input class="in" type="number" min="0" id="sm-cant"></label>
+    <label class="f" style="grid-column:1/-1"><span>Nota</span><input class="in" id="sm-nota" placeholder="${acc === "ingreso" ? "ej: pedido a proveedor, remito 123" : acc === "salida" ? "ej: 2 de regalo a influencer" : "opcional"}"></label></div>
+    <p class="note" id="sm-err" style="color:var(--red)"></p>
+    <div class="actions" style="justify-content:flex-end"><button class="ctl" data-act="close">Cancelar</button><button class="ctl pri" id="sm-ok">Guardar</button></div>`);
+  document.getElementById("sm-ok").onclick = async () => {
+    const fecha = document.getElementById("sm-fecha").value, cantS = document.getElementById("sm-cant").value.trim(), nota = document.getElementById("sm-nota").value.trim();
+    const cant = Number(cantS);
+    const err = (m) => (document.getElementById("sm-err").textContent = m);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return err("Elegí la fecha.");
+    if (fecha > today) return err("La fecha no puede ser futura.");
+    if (x.conteo && fecha < x.conteo.fecha) return err(`Es anterior al conteo del ${fechaCorta(x.conteo.fecha)}: no cambiaría nada.`);
+    if (cantS === "" || !Number.isFinite(cant) || cant < 0 || !Number.isInteger(cant)) return err("Poné una cantidad entera.");
+    let doc;
+    if (acc === "conteo") {
+      // Se compara contra lo que la app calcula para ese día.
+      const calc = M.stockDetalle({ ...ctx(), orders: ctx().orders.filter((o) => M.dayOf(o.c) <= fecha), stockMovs: (S.stockMovs || []).filter((m) => m.fecha <= fecha) }, fecha).find((y) => y.pid === pid);
+      const dif = cant - Math.round(calc.actual);
+      if (dif === 0) { closeModal(); return toast("Coincide con la cuenta de la app. ¡Bien!"); }
+      doc = { pid, fecha, tipo: "ajuste", cant: dif, nota: `Contaste ${cant}, la app calculaba ${int(calc.actual)}${nota ? " · " + nota : ""}` };
+    } else {
+      if (!(cant > 0)) return err("Poné cuántas unidades.");
+      doc = { pid, fecha, tipo: acc, cant, nota };
+    }
+    await db.collection("stockmov").add({ ...doc, at: new Date().toISOString() });
+    closeModal();
+    toast(acc === "conteo" ? `Ajuste guardado: ${doc.cant > 0 ? "+" : ""}${doc.cant} unidades` : "Guardado");
+  };
+}
+
 // ============ render ============
 function render() {
   const a = document.activeElement;
@@ -778,7 +897,7 @@ function render() {
   const scroll = window.scrollY;
   $("#side").innerHTML = sideHTML();
   $("#topr").innerHTML = topRight();
-  const V = { dashboard: viewDashboard, anuncios: viewAnuncios, caja: viewCaja, impuestos: viewImpuestos, socios: viewSocios, gastos: viewGastos, calculadora: viewCalc, config: viewConfig, facturas: viewFacturas };
+  const V = { dashboard: viewDashboard, anuncios: viewAnuncios, caja: viewCaja, impuestos: viewImpuestos, socios: viewSocios, gastos: viewGastos, calculadora: viewCalc, config: viewConfig, facturas: viewFacturas, stock: viewStock };
   $("#title").textContent = (VIEWS.find((v) => v[0] === S.view) || VIEWS[0])[1];
   // Lo que el usuario está escribiendo en un formulario no se borra cuando la pantalla se actualiza sola.
   const kept = {};
@@ -792,7 +911,7 @@ document.addEventListener("focusout", () => setTimeout(() => { if (S.dirty) rend
 // ============ eventos ============
 document.addEventListener("click", async (e) => {
   if (await onFactClick(e)) return;
-  const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-mpmodo],[data-fijoadd],[data-fijodel]");
+  const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-mpmodo],[data-fijoadd],[data-fijodel],[data-stk]");
   const cp = e.target.closest("[data-copy]");
   if (cp) { e.preventDefault(); navigator.clipboard.writeText(cp.dataset.copy).then(() => toast("Copiado"), () => toast("No se pudo copiar")); return; }
   if (!t) return;
@@ -817,6 +936,7 @@ document.addEventListener("click", async (e) => {
   if (d.fijodel !== undefined) { const f = [...(cfg().fijos || [])]; f.splice(Number(d.fijodel), 1); saveCostos({ fijos: f }); return render(); }
   if (d.esc) { const s = S.escenarios.find((x) => x.id === d.esc); if (s) { S.calcCur = { ...s.v }; S.calcTouched = true; saveCalc(); render(); } return; }
   if (d.escdel) { await db.doc("escenarios/" + d.escdel).delete(); return; }
+  if (d.stk) return stockAccion(d.stk, d.pid, d.id);
   if (d.open === "gasto") return modalGasto(d.id);
   if (d.open === "mov") return modalMov(d.id);
   const act = d.act;
@@ -903,6 +1023,13 @@ document.addEventListener("change", async (e) => {
   if (d.costsel) { saveCostos({ [d.costsel]: t.value }); return; }
   if (d.cpaobj) { saveCostos({ cpaObjetivo: { ...cfg().cpaObjetivo, [d.cpaobj]: Number(t.value) || 0 } }); return; }
   if (d.fijo !== undefined) { const f = [...(cfg().fijos || [])]; f[Number(d.fijo)] = { ...f[Number(d.fijo)], [d.k]: d.k === "monto" ? Number(t.value) || 0 : t.value }; saveCostos({ fijos: f }); return; }
+  if (d.stkcfg) {
+    const prev = S.prods[d.stkcfg] || {};
+    const v = t.type === "checkbox" ? t.checked : t.value === "" ? null : Number(t.value);
+    const next = { ...prev, nombre: prev.nombre || (M.stockDetalle(ctx(), today).find((x) => x.pid === d.stkcfg) || {}).nombre || "", [d.k]: v };
+    S.prods = { ...S.prods, [d.stkcfg]: next };
+    await db.doc("prods/" + d.stkcfg).set(next); render(); return;
+  }
   if (d.prod) {
     const prev = S.prods[d.prod] || {};
     const p = productosVistos().find((x) => x.pid === d.prod);
