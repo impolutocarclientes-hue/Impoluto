@@ -29,7 +29,7 @@ function pasos(d) {
     ${ext("https://auth.afip.gob.ar/contribuyente_/login.xhtml", "Abrir ARCA")}
     <div class="note">Si no te aparece el servicio, agregalo en <b>Administrador de Relaciones de Clave Fiscal → Adherir servicio → ARCA → Servicios interactivos → Administración de Certificados Digitales</b>.</div>`, false);
   h += step(3, "Dale permiso para facturar", `<div>En ARCA → <b>Administrador de Relaciones de Clave Fiscal</b> → <b>Nueva relación</b> → Buscar → <b>ARCA → WebServices → Facturación Electrónica</b>. En «Representante» elegí el alias <code>impolutoapp</code> y confirmá.</div>`, false);
-  h += step(4, "Creá un punto de venta para la app", `<div>En ARCA → <b>Administración de puntos de venta y domicilios</b> → <b>Agregar</b>. Sistema: <b>«Factura Electrónica - Monotributo / Responsable Inscripto - Web Services»</b>. Un número que no uses en otro lado (por ejemplo, el 5).</div>`, false);
+  h += step(4, "Creá un punto de venta para la app", `<div>En ARCA → <b>Administración de puntos de venta y domicilios</b> → <b>Agregar</b>. Sistema: <b>«Factura Electrónica - Monotributo / Responsable Inscripto - Web Services»</b>. <b>Tiene que ser nuevo, solo para esta app</b>: no uses el que factura Mercado Libre (Ecomm-App). Si elegís uno que ya tiene facturas de otro sistema, la app no te deja.</div>`, false);
   h += step(5, "Pegá el certificado", `<div>Abrí el archivo que bajaste de ARCA (.crt) o arrastralo acá.</div>
     <div class="actions"><input type="file" id="fa-crt-file" accept=".crt,.pem,.cer,text/plain"></div>
     <textarea class="in" id="fa-crt" rows="4" placeholder="-----BEGIN CERTIFICATE-----" style="font-family:monospace;font-size:11px;width:100%"></textarea>

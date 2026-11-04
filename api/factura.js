@@ -61,6 +61,8 @@ async function resolverPendientes(arca, facturas) {
 
 async function emitirUno(arca, o, facturas) {
   const ultimo = await ultimoNumero(arca, FACTURA_B);
+  const maxPropio = Math.max(0, ...Object.values(facturas).filter((f) => f.pto === arca.ptoVta && (f.tipo || FACTURA_B) === FACTURA_B).map((f) => Number(f.nro) || 0));
+  if (ultimo !== maxPropio) throw new Error(`En el punto de venta ${arca.ptoVta} facturó otro sistema (ARCA va por el ${ultimo}, la app por el ${maxPropio}). No se emite nada para no mezclar con Mercado Libre: usá un punto de venta solo para esta app.`);
   const nro = ultimo + 1;
   const total = Number(o.cur != null ? o.cur : o.tot);
   const base = { tipo: FACTURA_B, pto: arca.ptoVta, nro, fecha: yyyymmdd(hoyAR()), pedido: o.n, orderId: o.id, alicuota: arca.alicuota, items: itemsDe(o), envio: Number(o.ship) || 0, entorno: arca.entorno || "prod" };
@@ -169,7 +171,15 @@ export default async function handler(req, res) {
     if (b.action === "config") {
       if (!arca) return res.status(400).json({ error: "Falta conectar ARCA." });
       const next = { ...arca };
-      if (b.ptoVta !== undefined) next.ptoVta = Number(b.ptoVta) || null;
+      if (b.ptoVta !== undefined) {
+        const pto = Number(b.ptoVta) || null;
+        if (pto) {
+          const ultimo = await ultimoNumero({ ...arca, ptoVta: pto }, FACTURA_B);
+          const propias = Object.values(await leerHash(FACT)).filter((f) => f.pto === pto).length;
+          if (ultimo > propias) return res.status(400).json({ error: `El punto de venta ${pto} ya tiene ${ultimo} facturas hechas por otro sistema (por ejemplo, las de Mercado Libre). Creá en ARCA un punto de venta nuevo solo para esta app.` });
+        }
+        next.ptoVta = pto;
+      }
       if (b.alicuota !== undefined) { if (b.alicuota !== null && !ALICUOTAS[String(b.alicuota)]) return res.status(400).json({ error: "Alícuota inválida." }); next.alicuota = b.alicuota; }
       if (b.desde !== undefined) next.desde = /^\d{4}-\d{2}-\d{2}$/.test(b.desde) ? b.desde : null;
       if (b.emisor) next.emisor = { ...(arca.emisor || {}), ...Object.fromEntries(Object.entries(b.emisor).map(([k, v]) => [k, String(v || "").slice(0, 120)])) };

@@ -128,7 +128,13 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
   r = await call("POST", { action: "emitir", ids: ["1001"] });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /punto de venta/);
-  await call("POST", { action: "config", ptoVta: 3 });
+  // El punto 3 ya tiene 41 facturas de otro sistema (Mercado Libre): no se deja elegir
+  r = await call("POST", { action: "config", ptoVta: 3 });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /otro sistema/);
+  arcaFake.last = 0;
+  r = await call("POST", { action: "config", ptoVta: 3 });
+  assert.equal(r.status, 200);
   r = await call("POST", { action: "emitir", ids: ["1001"] });
   assert.match(r.body.error, /tus datos/); // la alícuota ya viene en 21 %
   await call("POST", { action: "config", alicuota: null });
@@ -146,22 +152,30 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
   r = await call("POST", { action: "emitir", ids: ["1001", "1002", "1004"] });
   assert.equal(r.status, 200);
   const [a, b, c] = r.body.resultados;
-  assert.equal(a.f.nro, 42); assert.equal(b.f.nro, 43);
+  assert.equal(a.f.nro, 1); assert.equal(b.f.nro, 2);
   assert.equal(c.ok, false);
   assert.equal(a.f.total, 42990);
 
   // 5) Volver a emitir el mismo pedido no crea otra factura
   r = await call("POST", { action: "emitir", ids: ["1001"] });
   assert.equal(r.body.resultados[0].ya, true);
-  assert.equal(arcaFake.last, 43);
+  assert.equal(arcaFake.last, 2);
 
   // 6) Se corta la conexión justo cuando ARCA aprobó: se consulta y se guarda, sin duplicar
   arcaFake.cortar = true;
   r = await call("POST", { action: "emitir", ids: ["1003"] });
   assert.equal(r.body.resultados[0].ok, true, JSON.stringify(r.body));
-  assert.equal(r.body.resultados[0].f.nro, 44);
-  assert.equal(arcaFake.last, 44);
+  assert.equal(r.body.resultados[0].f.nro, 3);
+  assert.equal(arcaFake.last, 3);
   assert.equal(Object.keys(arcaFake.comps).length, 3);
+
+  // Si otro sistema factura en el mismo punto de venta, la app frena y no emite
+  arcaFake.last = 10;
+  await redis.hset(ORDERS, { "1006": JSON.stringify(order("1006", 42990)) });
+  r = await call("POST", { action: "emitir", ids: ["1006"] });
+  assert.equal(r.body.resultados[0].ok, false);
+  assert.match(r.body.resultados[0].error, /otro sistema/);
+  assert.equal(arcaFake.last, 10);
 
   // 7) El login a ARCA se reutiliza (ARCA no da otro mientras el anterior sigue vigente)
   assert.equal(arcaFake.logins, 1);
