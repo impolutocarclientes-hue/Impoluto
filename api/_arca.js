@@ -2,6 +2,27 @@
 // La clave privada se genera y queda en el servidor (Redis, hash de secretos): nadie la ve ni la copia.
 import forge from "node-forge";
 import { redis } from "./_lib.js";
+import https from "node:https";
+
+// El servidor de facturación de ARCA usa una clave Diffie-Hellman de 1024 bits que Node rechaza por defecto
+// ("dh key too small"). Autorizado por el usuario (5/11/2026): SOLO para hosts de ARCA bajamos TLS a SECLEVEL=1,
+// que acepta 1024 bits. El resto de las conexiones de la app (Shopify, Meta, Mercado Pago) no cambia.
+const agenteArca = new https.Agent({ ciphers: "DEFAULT@SECLEVEL=1", keepAlive: true });
+const esHostArca = (u) => /(^|\.)afip\.gov\.ar$/.test(new URL(u).hostname);
+export function arcaFetch(url, opts = {}) {
+  if (!esHostArca(url)) return Promise.reject(new Error("arcaFetch solo se usa con ARCA"));
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method: opts.method || "GET", headers: opts.headers, agent: agenteArca, timeout: 25000 }, (res) => {
+      const partes = [];
+      res.on("data", (c) => partes.push(c));
+      res.on("end", () => { const txt = Buffer.concat(partes).toString("utf8"); resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, text: async () => txt }); });
+    });
+    req.on("timeout", () => req.destroy(new Error("ARCA no respondió a tiempo")));
+    req.on("error", reject);
+    if (opts.body) req.write(opts.body);
+    req.end();
+  });
+}
 
 const URLS = {
   prod: { wsaa: "https://wsaa.afip.gov.ar/ws/services/LoginCms", wsfe: "https://servicios1.afip.gov.ar/wsfev1/service.asmx" },
@@ -59,7 +80,9 @@ export const tag = (xml, name) => { const m = String(xml).match(reTag(name)); re
 export const tags = (xml, name) => [...String(xml).matchAll(reTag(name, "g"))].map((m) => m[1]);
 const unesc = (s) => String(s || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 
-async function soap(url, action, body, fetchImpl = fetch) {
+// En Vercel, la conexión especial para ARCA; en local y en los tests, el fetch normal (que los tests reemplazan).
+const fetchArca = (u, o) => (process.env.VERCEL ? arcaFetch(u, o) : globalThis.fetch(u, o));
+async function soap(url, action, body, fetchImpl = fetchArca) {
   const env = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>${body}</soap:Body></soap:Envelope>`;
   let r;
   try {
@@ -100,7 +123,7 @@ export function firmarTra(xml, certPem, keyPem) {
   return forge.util.encode64(forge.asn1.toDer(p7.toAsn1()).getBytes());
 }
 
-export async function ticket(cfg, { fetchImpl = fetch, force = false } = {}) {
+export async function ticket(cfg, { fetchImpl = fetchArca, force = false } = {}) {
   const ent = cfg.entorno === "homo" ? "homo" : "prod";
   const cacheKey = TA_KEY + ":" + ent + ":" + cfg.cuit;
   const c = await redis.get(cacheKey);
