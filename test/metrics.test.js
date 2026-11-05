@@ -261,3 +261,14 @@ test("Auditoría: MP sin vincular usa el % real; equilibrio del píxel incluye e
   assert.ok(r.beRoasPixel > r.beRoas);
   assert.ok(Math.abs(r.beRoasPixel / r.beRoas - 60000 / 50000) < 1e-9);
 });
+
+test("envío que paga el cliente: IVA de venta (con beneficio) y crédito por la factura de Andreani", () => {
+  const sin = M.costoPedido(order(4, "2026-10-10", 1, 42990), costos, prods);
+  const con = M.costoPedido(order(5, "2026-10-10", 1, 42990 + 13450, { ship: 13450 }), costos, prods);
+  assert.equal(con.venta, sin.venta);
+  const ivaEnvio = (13450 / 1.21) * 0.21;
+  assert.ok(Math.abs(con.ivaDebito - sin.ivaDebito - ivaEnvio * 0.5) < 1e-6);
+  // La comisión de MP también cobra sobre el envío; descontando eso, el envío deja medio IVA a favor.
+  const difMp = (con.mp - sin.mp) / 1.21 * 0.21;
+  assert.ok(Math.abs(con.ivaCredito - sin.ivaCredito - ivaEnvio - difMp) < 1e-6);
+});

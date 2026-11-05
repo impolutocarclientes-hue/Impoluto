@@ -474,10 +474,11 @@ function viewImpuestos() {
   let h = `<div class="bar2"><div class="chips">${meses.map((x) => `<button class="chip" data-impmes="${x}" aria-pressed="${S.impMes === x}">${esc(monthName(x))}</button>`).join("")}</div><button class="ctl" data-act="csv-imp">Exportar para el contador (CSV)</button></div><div class="content">`;
   const rows = ri ? [
     ["Ventas del mes (con IVA)", t.ventas, ""],
-    ["IVA de venta (21 % contenido)", t.debitoTotal, "Ventas ÷ 1,21 × 0,21."],
+    ["IVA de venta (21 % contenido)", t.debitoTotal, "(Ventas + envíos que pagó el cliente) ÷ 1,21 × 0,21."],
     [`Beneficio de IVA (${nn(cfg().beneficioIva)} %)`, -t.beneficio, "La parte del IVA de venta que no pagás por el beneficio."],
     ["IVA de venta que pagás", t.debito, ""],
-    ["IVA de comisiones (Mercado Pago + Shopify)", -t.creditoComisiones, "Te lo facturan: lo descontás."],
+    ["IVA de comisiones (Mercado Pago)", -t.creditoComisiones, "Te lo facturan: lo descontás."],
+    ["IVA de envíos (Andreani)", -t.creditoEnvios, "Envíos gratis y los que pagó el cliente: vienen con factura."],
     ["IVA de gastos con Factura A", -t.creditoGastos, "Sale de los gastos que cargaste con Factura A en este mes."],
     ["IVA a pagar", t.ivaPagar, t.ivaPagar < 0 ? "Negativo = saldo a favor para el mes que viene." : ""],
   ] : [["Ventas del mes", t.ventas, ""], ["IVA", 0, "En monotributo no pagás IVA aparte: va en la cuota."]];
@@ -786,7 +787,7 @@ function csvOrders() {
 }
 function csvImp() {
   const t = M.impuestosMes(ctx(), S.impMes);
-  const rows = [["Concepto", "Monto"], ["Ventas con IVA", t.ventas], ["IVA de venta total", t.debitoTotal], ["Beneficio de IVA", t.beneficio], ["IVA de venta a pagar", t.debito], ["IVA comisiones de Mercado Pago", t.creditoComisiones], ["IVA gastos con Factura A", t.creditoGastos], ["IVA a pagar", t.ivaPagar], ["Ingresos brutos", t.iibb], ["Ganancia del mes", t.gananciaAntes]].map((r) => [r[0], typeof r[1] === "number" ? Math.round(r[1]) : r[1]]);
+  const rows = [["Concepto", "Monto"], ["Ventas con IVA", t.ventas], ["IVA de venta total", t.debitoTotal], ["Beneficio de IVA", t.beneficio], ["IVA de venta a pagar", t.debito], ["IVA comisiones de Mercado Pago", t.creditoComisiones], ["IVA envíos Andreani", t.creditoEnvios], ["IVA gastos con Factura A", t.creditoGastos], ["IVA a pagar", t.ivaPagar], ["Ingresos brutos", t.iibb], ["Ganancia del mes", t.gananciaAntes]].map((r) => [r[0], typeof r[1] === "number" ? Math.round(r[1]) : r[1]]);
   rows.push([], ["Gastos del mes con Factura A"], ["Fecha", "Concepto", "Proveedor", "Monto", "IVA"]);
   S.gastos.filter((g) => g.fecha.startsWith(S.impMes) && g.facturaA).forEach((g) => rows.push([g.fecha, g.concepto || catOf(g).name, g.proveedor || "", Math.round(g.monto), Math.round(g.monto - g.monto / 1.21)]));
   download(`impuestos_${S.impMes}.csv`, rows);

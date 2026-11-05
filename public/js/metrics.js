@@ -102,6 +102,8 @@ export function costoPedido(o, cfgIn, prods) {
   // Envío: lo fijo por pedido + el envío gratis que pagás vos (a sucursal, según el destino; a domicilio, el monto cargado).
   const envio = fisico ? n(cfg.envioPedido) + envioQuePagas(o, cfg, prods) : 0;
   const armado = fisico ? n(cfg.armadoPedido) : 0;
+  // Envío que pagó el cliente: entra en la factura (IVA de venta) y Senyfull te lo cobra con factura de Andreani (crédito de IVA).
+  const envioCliente = Math.max(0, n(o.ship));
   // Mercado Pago: la comisión real del cobro vinculado. Si no se vinculó, el % real promedio de tus cobros
   // (o el estimado de la configuración si todavía no hay cobros). MP cobra sobre el total, envío incluido.
   const mpPct = transfer ? 0 : cfg._mpProm != null ? n(cfg._mpProm) : cfg.mpCuotas && units >= n(cfg.mpDesde || 1) ? n(cfg.mpPctCuotas) : n(cfg.mpPctSin);
@@ -112,13 +114,13 @@ export function costoPedido(o, cfgIn, prods) {
   const iibb = ((cfg.regimen !== "mono" ? venta / 1.21 : venta) * n(cfg.iibbPct)) / 100;
   let ivaDebito = 0, ivaCredito = 0, ivaPagar = 0;
   if (cfg.regimen !== "mono") {
-    ivaDebito = iva(venta) * (1 - n(cfg.beneficioIva) / 100);
-    ivaCredito = iva(mp) + iva(envio) + (cfg.armadoFactura ? iva(armado) : 0) + (cfg.provFactura ? iva(producto) : 0);
+    ivaDebito = iva(venta + envioCliente) * (1 - n(cfg.beneficioIva) / 100);
+    ivaCredito = iva(mp) + iva(envio) + iva(envioCliente) + (cfg.armadoFactura ? iva(armado) : 0) + (cfg.provFactura ? iva(producto) : 0);
     ivaPagar = ivaDebito - ivaCredito;
   }
   const cobroImp = mp + shopify + iibb + ivaPagar;
   const margen = venta - producto - envio - armado - cobroImp;
-  return { venta, units, transfer, producto, envio, armado, mp, shopify, iibb, ivaDebito, ivaCredito, ivaPagar, cobroImp, margen };
+  return { venta, units, transfer, producto, envio, envioCliente, armado, mp, shopify, iibb, ivaDebito, ivaCredito, ivaPagar, cobroImp, margen };
 }
 
 // ---------- Anuncios ----------
@@ -241,7 +243,7 @@ export function resumen({ orders, ads, meta, costos, prods, pays }, from, to) {
     cancelados: { n: por.cancelado.length, monto: sum(por.cancelado, (o) => n(o.tot)) },
     devueltos: { n: por.devuelto.length, monto: sum(por.devuelto, (o) => n(o.tot)) },
     ventas, netas, units,
-    producto: T("producto"), envio: T("envio"), armado: T("armado"),
+    producto: T("producto"), envio: T("envio"), envioCliente: T("envioCliente"), armado: T("armado"),
     mp: mpUsado, mpEstimado: mpEst, mpReal: real, shopify: T("shopify"), iibb: T("iibb"),
     ivaDebito: T("ivaDebito"), ivaCredito, ivaPagar,
     cobroImp, margenAntes,
@@ -705,16 +707,17 @@ export function impuestosMes(ctx, mes /* AAAA-MM */) {
   const gastosMes = (ctx.gastos || []).filter((g) => g.fecha >= from && g.fecha <= to);
   const creditoGastos = sum(gastosMes, ivaDeGasto);
   const ri = cfg.regimen !== "mono";
-  const debitoTotal = ri ? iva(r.ventas) : 0;
+  const debitoTotal = ri ? iva(r.ventas + r.envioCliente) : 0; // la factura incluye el envío que pagó el cliente
   const debito = debitoTotal * (1 - n(cfg.beneficioIva) / 100);
   const creditoComisiones = ri ? iva(r.mp) : 0; // comisión real de Mercado Pago (Shopify factura desde el exterior, sin IVA)
-  const ivaPagar = ri ? debito - creditoComisiones - creditoGastos : 0;
+  const creditoEnvios = ri ? iva(r.envio + r.envioCliente) : 0; // Andreani (vía Senyfull) factura todos los envíos con IVA
+  const ivaPagar = ri ? debito - creditoComisiones - creditoEnvios - creditoGastos : 0;
   const gananciaAntes = r.ganancia;
   const ganancias = 0; // el impuesto a las Ganancias no se cuenta: depende de la declaración anual
   return {
     mes, from, to, ventas: r.ventas, regimen: cfg.regimen,
     debitoTotal, beneficio: debitoTotal - debito, debito,
-    creditoComisiones, creditoGastos, ivaPagar,
+    creditoComisiones, creditoEnvios, creditoGastos, ivaPagar,
     iibb: r.iibb, ganancias, gananciaAntes, gananciaNeta: gananciaAntes - ganancias,
     estimadoEnDashboard: r.ivaPagar,
     retencionesMp: r.mpReal ? r.mpReal.retenciones : null,
