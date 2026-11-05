@@ -12,6 +12,17 @@ export async function cargarFacturas(force) {
 
 const cuitOk = (c) => { const s = String(c || ""); if (!/^\d{11}$/.test(s)) return false; const w = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]; const r = 11 - (w.reduce((a, x, i) => a + x * Number(s[i]), 0) % 11); return (r === 11 ? 0 : r === 10 ? 9 : r) === Number(s[10]); };
 const fecha = (iso) => new Date(iso).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
+const hoyISO = () => new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+const isoDe = (s) => `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+// Rango de fechas que ARCA acepta: hasta 5 días atrás y no antes de la última factura del mismo tipo.
+function rangoFecha(d, tipo) {
+  const hoy = hoyISO();
+  let min = new Date(new Date(hoy + "T12:00:00Z").getTime() - 5 * 864e5).toISOString().slice(0, 10);
+  const ult = d.facturas.filter((f) => f.pto === d.arca.ptoVta && f.tipo === tipo && f.fecha).map((f) => isoDe(f.fecha)).sort().pop();
+  if (ult && ult > min) min = ult;
+  return { min, max: hoy };
+}
+const inputFecha = (id, d, tipo, ro) => { const r = rangoFecha(d, tipo); const v = F[id] && F[id] >= r.min && F[id] <= r.max ? F[id] : r.max; return `<label class="f" style="max-width:190px"><span>Fecha de la factura</span><input class="in" type="date" id="${id}" min="${r.min}" max="${r.max}" value="${v}" ${ro ? "readonly" : ""}></label>`; };
 const fch = (s) => (s ? `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)}` : "");
 const nro = (f) => `${String(f.pto).padStart(5, "0")}-${String(f.nro).padStart(8, "0")}`;
 const esNC = (f) => f.tipo === 8 || f.tipo === 3;
@@ -104,16 +115,18 @@ export function viewFacturas() {
       <label class="f"><span>Condición frente al IVA</span><select class="in" id="fa-a-cond" ${F.confirmA ? "disabled" : ""}><option value="">Elegí…</option><option value="ri" ${F.aDatos && F.aDatos.cond === "ri" ? "selected" : ""}>Responsable inscripto</option><option value="mono" ${F.aDatos && F.aDatos.cond === "mono" ? "selected" : ""}>Monotributista</option></select></label>
       <label class="f" style="grid-column:1/-1"><span>Nombre o razón social</span><input class="in" id="fa-a-razon" value="${esc((F.aDatos && F.aDatos.razon) || "")}" ${F.confirmA ? "readonly" : ""}></label>
       <label class="f" style="grid-column:1/-1"><span>Domicilio</span><input class="in" id="fa-a-dom" placeholder="Calle 123, Localidad, Provincia" value="${esc((F.aDatos && F.aDatos.domicilio) || "")}" ${F.confirmA ? "readonly" : ""}></label></div>
-      <div class="actions">${F.confirmA ? `<button class="ctl pri" data-fact="facA-ok" data-id="${esc(p.id)}" ${F.emitiendo ? "disabled" : ""}>${F.emitiendo ? "Emitiendo…" : "Sí, emitir factura A por " + money(p.total)}</button><button class="ctl" data-fact="facA-volver">Revisar datos</button><span class="note">Una factura emitida no se borra: si hay un error se hace nota de crédito.</span>` : `<button class="ctl pri" data-fact="facA-pre">Emitir factura A</button><button class="ctl" data-fact="facA-no">Cancelar</button>`}</div></div>`;
+      ${inputFecha("faFechaA", d, 1, F.confirmA)}
+      <div class="actions">${F.confirmA ? `<button class="ctl pri" data-fact="facA-ok" data-id="${esc(p.id)}" ${F.emitiendo ? "disabled" : ""}>${F.emitiendo ? "Emitiendo…" : "Sí, emitir factura A por " + money(p.total) + " con fecha " + (F.faFechaA || hoyISO()).split("-").reverse().join("/")}</button><button class="ctl" data-fact="facA-volver">Revisar datos</button><span class="note">Una factura emitida no se borra: si hay un error se hace nota de crédito.</span>` : `<button class="ctl pri" data-fact="facA-pre">Emitir factura A</button><button class="ctl" data-fact="facA-no">Cancelar</button>`}</div></div>`;
   }
 
   // Para facturar
-  h += `<section class="block"><div class="bh"><h2>Para facturar</h2><span class="note">${fact.length} pedidos pagados desde el ${esc(new Date(d.desde + "T12:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "short" }))}</span></div>`;
+  h += `<section class="block"><div class="bh"><h2>Para facturar</h2><span class="note">${fact.length} pedidos pagados desde el</span><input class="in" type="date" id="fa-ver-desde" value="${esc(d.desde)}" style="width:150px"><button class="ctl" data-fact="ver-desde">Ver</button></div>
+  <p class="note">Podés listar pedidos de meses anteriores, pero ARCA solo acepta facturas con fecha de hasta 5 días atrás: salen con la fecha que elijas dentro de ese rango.</p>`;
   if (fact.length) {
     h += `<div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:28px"><input type="checkbox" data-fact-all ${F.sel.size === fact.length ? "checked" : ""}></th><th>Pedido</th><th>Fecha</th><th class="r">Total</th><th></th></tr></thead><tbody>
       ${fact.map((p) => `<tr><td><input type="checkbox" data-fact-sel="${esc(p.id)}" ${F.sel.has(p.id) ? "checked" : ""}></td><td>${esc(p.n)}</td><td>${esc(fecha(p.c))}</td><td class="r">${money(p.total)}</td><td class="r"><button class="ctl" data-fact="facA" data-id="${esc(p.id)}" ${listo ? "" : "disabled"} title="Para un cliente responsable inscripto o monotributista que te pide factura con su CUIT">Factura A</button></td></tr>`).join("")}</tbody></table></div>
-      <div class="actions" style="margin-top:10px">
-      ${F.confirm ? `<button class="ctl pri" data-fact="emitir" ${F.emitiendo ? "disabled" : ""}>${F.emitiendo ? "Emitiendo…" : `Sí, emitir ${F.sel.size} factura${F.sel.size === 1 ? "" : "s"} por ${money(selTot)}`}</button><button class="ctl" data-fact="cancelar">Cancelar</button><span class="note">Una factura emitida no se borra: si hay que corregirla se hace una nota de crédito.</span>`
+      <div class="actions" style="margin-top:10px;align-items:flex-end">${inputFecha("faFechaB", d, 6, F.confirm)}
+      ${F.confirm ? `<button class="ctl pri" data-fact="emitir" ${F.emitiendo ? "disabled" : ""}>${F.emitiendo ? "Emitiendo…" : `Sí, emitir ${Math.min(F.sel.size, 10)} factura${F.sel.size === 1 ? "" : "s"} con fecha ${(F.faFechaB || hoyISO()).split("-").reverse().join("/")}`}</button><button class="ctl" data-fact="cancelar">Cancelar</button><span class="note">Una factura emitida no se borra: si hay que corregirla se hace una nota de crédito.</span>`
       : `<button class="ctl pri" data-fact="pre-emitir" ${listo && F.sel.size ? "" : "disabled"}>Emitir ${F.sel.size || ""} factura${F.sel.size === 1 ? "" : "s"}</button><span class="note">${F.sel.size > 10 ? "Se emiten de a 10 por vez." : "Factura B a consumidor final" + (a.alicuota ? ", IVA " + a.alicuota.replace(".", ",") + " %" : "") + "."}</span>`}</div>`;
   } else h += `<div class="card empty">No hay pedidos pagados sin factura.</div>`;
   if (noFact.length) h += `<p class="note">No se pueden facturar todavía: ${noFact.map((p) => `${esc(p.n)} (${esc(p.motivo)})`).join(" · ")}</p>`;
@@ -177,12 +190,13 @@ export async function onFactClick(e) {
     else if (act === "mail") {
       await post({ action: "mail", resendKey: document.getElementById("fa-rk").value, from: document.getElementById("fa-from").value, replyTo: document.getElementById("fa-reply").value });
       F.editMail = false; await cargarFacturas(true); toast("Email configurado");
-    } else if (act === "pre-emitir") { F.confirm = true; render(); }
+    } else if (act === "pre-emitir") { F.faFechaB = (document.getElementById("faFechaB") || {}).value || null; F.confirm = true; render(); }
+    else if (act === "ver-desde") { await post({ action: "config", desde: document.getElementById("fa-ver-desde").value || null }); F.sel = new Set(); await cargarFacturas(true); }
     else if (act === "cancelar") { F.confirm = false; render(); }
     else if (act === "emitir") {
       F.emitiendo = true; render();
       const ids = [...F.sel].slice(0, 10);
-      const r = await post({ action: "emitir", ids });
+      const r = await post({ action: "emitir", ids, fecha: F.faFechaB || null });
       const ok = r.resultados.filter((x) => x.ok && !x.ya), mal = r.resultados.filter((x) => !x.ok);
       const mailMal = ok.filter((x) => typeof x.mail === "string");
       ok.forEach((x) => F.sel.delete(x.id));
@@ -196,11 +210,12 @@ export async function onFactClick(e) {
       if (!cuitOk(cuit)) return toast("El CUIT no es válido: revisalo (11 números)."), true;
       if (!cond) return toast("Elegí la condición frente al IVA del cliente."), true;
       if (document.getElementById("fa-a-razon").value.trim().length < 2 || document.getElementById("fa-a-dom").value.trim().length < 4) return toast("Completá nombre y domicilio del cliente."), true;
+      F.faFechaA = (document.getElementById("faFechaA") || {}).value || null;
       F.aDatos = { cuit, cond, razon: document.getElementById("fa-a-razon").value.trim(), domicilio: document.getElementById("fa-a-dom").value.trim() };
       F.confirmA = true; render();
     } else if (act === "facA-ok") {
       F.emitiendo = true; render();
-      const r = await post({ action: "emitirA", id: t.dataset.id, ...F.aDatos });
+      const r = await post({ action: "emitirA", id: t.dataset.id, ...F.aDatos, fecha: F.faFechaA || null });
       F.emitiendo = false; F.confirmA = false; F.facA = null; F.aDatos = null;
       toast(`Factura A ${nro(r.f)} emitida`); await cargarFacturas(true);
     } else if (act === "anular") { F.anular = t.dataset.id; render(); }

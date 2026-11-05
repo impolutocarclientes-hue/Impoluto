@@ -113,7 +113,7 @@ async function emitirComp(arca, facturas, clave, datos) {
   const total = datos.total;
   // La nota de crédito usa la alícuota de SU factura (aunque después se haya cambiado la configuración).
   const alicuota = datos.alicuota || arca.alicuota;
-  const base = { ...datos, pto: arca.ptoVta, nro, fecha: yyyymmdd(hoyAR()), alicuota, entorno: arca.entorno || "prod", cuit: arca.cuit, ...montos(total, alicuota) };
+  const base = { ...datos, pto: arca.ptoVta, nro, fecha: datos.fecha || yyyymmdd(hoyAR()), alicuota, entorno: arca.entorno || "prod", cuit: arca.cuit, ...montos(total, alicuota) };
   // Se anota ANTES de pedir el CAE: si se corta, la próxima vez se consulta en ARCA y no se duplica.
   base.sentAt = new Date().toISOString();
   await guardarFactura(arca, clave, { ...base, estado: "enviando" });
@@ -143,8 +143,22 @@ async function emitirComp(arca, facturas, clave, datos) {
   return f;
 }
 
+// Fecha de emisión elegida por el usuario (AAAA-MM-DD). ARCA acepta para venta de productos hasta 5 días atrás
+// y nunca anterior a la última factura del mismo tipo en el punto de venta. Sin fecha: hoy.
+export function fechaEmision(fecha, facturas, pto, tipo, hoy = hoyAR()) {
+  if (!fecha) return yyyymmdd(hoy);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new Error("Fecha inválida.");
+  const min = new Date(new Date(hoy + "T12:00:00Z").getTime() - 5 * 864e5).toISOString().slice(0, 10);
+  if (fecha > hoy) throw new Error("La fecha no puede ser posterior a hoy.");
+  if (fecha < min) throw new Error(`ARCA solo acepta facturas con fecha desde el ${min.split("-").reverse().join("/")} (5 días atrás).`);
+  const ultima = Object.values(facturas).filter((f) => f.pto === pto && f.tipo === tipo && f.estado !== "rechazada").map((f) => f.fecha).sort().pop();
+  if (ultima && yyyymmdd(fecha) < ultima) throw new Error(`Ya hay una factura con fecha ${ultima.slice(6, 8)}/${ultima.slice(4, 6)}: ARCA no deja hacer una con fecha anterior en el mismo punto de venta.`);
+  return yyyymmdd(fecha);
+}
+
 // receptor (solo factura A): { cuit, cond: "ri" | "mono", razon, domicilio }
-const emitirUno = (arca, o, facturas, receptor = null) => emitirComp(arca, facturas, o.id, {
+const emitirUno = (arca, o, facturas, receptor = null, fecha = null) => emitirComp(arca, facturas, o.id, {
+  fecha: fecha || undefined,
   tipo: receptor ? FACTURA_A : FACTURA_B, receptor: receptor || undefined, pedido: o.n, orderId: o.id, items: itemsDe(o), envio: Number(o.ship) || 0, total: Number(o.cur != null ? o.cur : o.tot),
 });
 
@@ -326,7 +340,7 @@ export default async function handler(req, res) {
           const motivo = motivoNoFacturable(o);
           if (motivo) { out.push({ id, ok: false, error: motivo }); continue; }
           try {
-            const f = await emitirUno(arca, o, facturas);
+            const f = await emitirUno(arca, o, facturas, null, fechaEmision(b.fecha, facturas, arca.ptoVta, FACTURA_B));
             let mail = null;
             if (b.email !== false && sec.mail) { try { await enviarEmail(sec, arca, f); mail = true; } catch (err) { mail = err.message; } }
             out.push({ id, ok: true, f, mail });
@@ -360,7 +374,9 @@ export default async function handler(req, res) {
         if (o) await redis.hset(ORDERS, { [id]: JSON.stringify(o) });
         const motivo = motivoNoFacturable(o, { conCuit: true });
         if (motivo) return res.status(400).json({ error: motivo });
-        const f = await emitirUno(arca, o, facturas, { cuit, cond: b.cond, razon, domicilio });
+        let fch;
+        try { fch = fechaEmision(b.fecha, facturas, arca.ptoVta, FACTURA_A); } catch (err) { return res.status(400).json({ error: err.message }); }
+        const f = await emitirUno(arca, o, facturas, { cuit, cond: b.cond, razon, domicilio }, fch);
         return res.status(200).json({ ok: true, f });
       } finally { if ((await redis.get(LOCK)) === token) await redis.del(LOCK); }
     }

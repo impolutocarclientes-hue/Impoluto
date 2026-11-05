@@ -341,3 +341,15 @@ test("Conectar, emitir en orden, no duplicar y sobrevivir a un corte", async (t)
   assert.equal(r.headers["Content-Type"], "application/pdf");
   assert.equal(r.body.slice(0, 5).toString(), "%PDF-");
 });
+
+test("fecha de emisión: hasta 5 días atrás y no antes de la última del mismo tipo", async () => {
+  const { fechaEmision } = await import("../api/factura.js");
+  const hoy = "2026-11-05";
+  assert.equal(fechaEmision(null, {}, 7, 6, hoy), "20261105");
+  assert.equal(fechaEmision("2026-10-31", {}, 7, 6, hoy), "20261031");
+  assert.throws(() => fechaEmision("2026-10-30", {}, 7, 6, hoy), /5 días/);
+  assert.throws(() => fechaEmision("2026-11-06", {}, 7, 6, hoy), /posterior/);
+  const fs = { a: { pto: 7, tipo: 6, fecha: "20261103", estado: "emitida" }, b: { pto: 7, tipo: 1, fecha: "20261105", estado: "emitida" } };
+  assert.throws(() => fechaEmision("2026-11-02", fs, 7, 6, hoy), /anterior/);
+  assert.equal(fechaEmision("2026-11-03", fs, 7, 6, hoy), "20261103"); // otro tipo no limita
+});
