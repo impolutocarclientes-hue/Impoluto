@@ -410,11 +410,17 @@ function viewDashboard() {
       <label class="f" style="margin-top:8px"><span>¿Cuánto querés vender este mes?</span><div class="prefix"><em>$</em><input class="in" type="number" min="0" step="1000" data-app="metaVentas" value="${meta || ""}"></div></label></div></div>`);
   }
   if (show("ventas")) {
-    const ult = S.data.orders.filter((o) => !o.t && M.dayOf(o.c) >= S.from && M.dayOf(o.c) <= S.to).sort((a, b) => b.c.localeCompare(a.c)).slice(0, S.sub === "ventas" ? 200 : 15);
+    // Filtro: los pedidos sin pagar (rechazados por seguridad, Rapipago que no se pagó, cancelados) nunca suman en los números.
+    const FILTROS = [["pagados", "Pagados", (st) => st === "pagado"], ["sinpagar", "Sin pagar", (st) => st === "pendiente" || st === "vencido"], ["cancelados", "Cancelados o devueltos", (st) => st === "cancelado" || st === "devuelto"], ["todos", "Todos", () => true]];
+    const fv = FILTROS.find((x) => x[0] === (S.ventasFiltro || "pagados")) || FILTROS[0];
+    const enFechas = S.data.orders.filter((o) => !o.t && M.dayOf(o.c) >= S.from && M.dayOf(o.c) <= S.to);
+    const cuenta = (f) => enFechas.filter((o) => f(M.estado(o))).length;
+    const ult = enFechas.filter((o) => fv[2](M.estado(o))).sort((a, b) => b.c.localeCompare(a.c)).slice(0, S.sub === "ventas" ? 200 : 15);
+    const chipsVentas = `<div class="chips" style="margin-bottom:10px">${FILTROS.map(([k, l, f]) => `<button class="chip" data-vfil="${k}" aria-pressed="${fv[0] === k}">${l} (${cuenta(f)})</button>`).join("")}</div>${fv[0] !== "pagados" ? '<p class="note" style="margin:0 0 8px">Los pedidos sin pagar, cancelados o devueltos no suman en ventas, ganancia ni impuestos.</p>' : ""}`;
     const E = { pagado: ["good", "Pagado"], pendiente: ["warn", "Pendiente"], vencido: ["bad", "Venció"], cancelado: ["bad", "Cancelado"], devuelto: ["bad", "Devuelto"] };
-    h += block("ventas", "Últimas ventas", ult.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Pedido</th><th>Estado</th><th>Fecha</th><th>Productos</th><th>Cobro</th><th class="r">Total</th><th class="r">Te quedó</th><th class="r">Neto %</th></tr></thead><tbody>
+    h += block("ventas", "Últimas ventas", chipsVentas + (ult.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Pedido</th><th>Estado</th><th>Fecha</th><th>Productos</th><th>Cobro</th><th class="r">Total</th><th class="r">Te quedó</th><th class="r">Neto %</th></tr></thead><tbody>
       ${ult.map((o) => { const st = M.estado(o); const k = M.costoPedido(o, cfg(), S.prods); const margen = st === "pagado" ? k.margen : 0; return `<tr><td>${esc(o.n)}</td><td><span class="tag ${E[st][0]}">${E[st][1]}</span></td><td>${new Date(o.c).toLocaleString("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td><td>${esc(o.li.filter((l) => l.cq > 0).map((l) => l.cq + "× " + l.ti).join(", ").slice(0, 60))}</td><td class="muted">${M.esTransferencia(o) ? "Transferencia" : "Mercado Pago"}</td><td class="r">${money(o.tot)}</td><td class="r">${st === "pagado" ? money(margen) : "–"}</td><td class="r">${st === "pagado" && k.venta ? pct(margen / k.venta, 0) : "–"}</td></tr>`; }).join("")}</tbody></table></div>
-      <div class="actions" style="margin-top:8px"><button class="ctl" data-act="csv-orders">Exportar Excel (CSV)</button><span class="note">"Te quedó" es antes de anuncios y gastos fijos.</span></div>` : '<div class="card empty">Sin pedidos en estas fechas.</div>');
+      <div class="actions" style="margin-top:8px"><button class="ctl" data-act="csv-orders">Exportar Excel (CSV)</button><span class="note">"Te quedó" es antes de anuncios y gastos fijos.</span></div>` : '<div class="card empty">No hay pedidos así en estas fechas.</div>'));
   }
   if (show("grafico")) h += block("grafico", "Día por día", chartHTML(serie));
   return h + "</div>";
@@ -658,7 +664,8 @@ function viewConfig() {
     h += `<div class="card qcard"><h3>Tu dólar</h3>
       ${row("Dólar de ARQ", dolarArqHoy() ? `El gasto de Meta de cada día se pasa a pesos con el dólar de ARQ de ese día (se guarda solo). Hoy: <b>${ars(dolarArqHoy())}</b>. Los días anteriores a que se empezara a guardar usan el dólar cripto de ese día.` : "Todavía no se guardó el dólar de ARQ: se guarda solo en la próxima actualización.", `<div class="small muted">Respaldo si un día no hay dato:</div><div class="prefix"><em>$</em><input class="in" type="number" data-cost="dolar" value="${esc(S.costos.dolar ?? c.dolar)}"></div><a href="#" class="small" data-act="dolarhoy-cfg">Poner el de ARQ de hoy</a>`)}</div>
     <div class="card qcard"><h3>Lo que te cuesta cada pedido</h3>
-      ${row("Envío gratis a sucursal", "Lo que te cobra Andreani por cada envío gratis a sucursal (packs de 2 y 3). Se descuenta solo de esos pedidos.", pesos("envioSucursal"))}
+      ${row("Envío gratis a sucursal", `Se calcula solo con el código postal de cada pedido: tarifas de Andreani en Senyfull del ${new Date(M.TARIFAS_SUCURSAL.fecha + "T12:00:00").toLocaleDateString("es-AR")} (CABA y GBA $7.887 · centro $9.679 · resto $10.603). Solo en los pedidos con envío gratis a sucursal.`, `<span class="small muted">Automático</span>`)}
+      ${row("Envío gratis a domicilio", "Lo que te costó cada envío gratis a domicilio de los packs (hubo del 24/10 al 1/11). 0 si no lo pagaste vos.", pesos("envioDomicilio"))}
       ${row("Otro envío fijo por pedido", "Si pagás algo en todos los pedidos. 0 si no.", pesos("envioPedido"))}
       ${row("Armado y caja", "Caja, etiqueta, depósito.", pesos("armadoPedido"))}
       <p class="note">El costo de cada producto va en la pestaña <a href="#" data-cfgsub="productos">Productos</a>.</p></div>
@@ -934,7 +941,7 @@ document.addEventListener("focusout", () => setTimeout(() => { if (S.dirty) rend
 // ============ eventos ============
 document.addEventListener("click", async (e) => {
   if (await onFactClick(e)) return;
-  const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-mpmodo],[data-fijoadd],[data-fijodel],[data-stk]");
+  const t = e.target.closest("[data-nav],[data-sub],[data-preset],[data-cur],[data-act],[data-open],[data-adsdays],[data-adsgroup],[data-impmes],[data-socr],[data-gmes],[data-cfgsub],[data-calcb],[data-calcreg],[data-esc],[data-escdel],[data-costb],[data-costv],[data-mpmodo],[data-fijoadd],[data-fijodel],[data-stk],[data-vfil]");
   const cp = e.target.closest("[data-copy]");
   if (cp) { e.preventDefault(); navigator.clipboard.writeText(cp.dataset.copy).then(() => toast("Copiado"), () => toast("No se pudo copiar")); return; }
   if (!t) return;
@@ -960,6 +967,7 @@ document.addEventListener("click", async (e) => {
   if (d.esc) { const s = S.escenarios.find((x) => x.id === d.esc); if (s) { S.calcCur = { ...s.v }; S.calcTouched = true; saveCalc(); render(); } return; }
   if (d.escdel) { await db.doc("escenarios/" + d.escdel).delete(); return; }
   if (d.stk) return stockAccion(d.stk, d.pid, d.id);
+  if (d.vfil) { S.ventasFiltro = d.vfil; return render(); }
   if (d.open === "gasto") return modalGasto(d.id);
   if (d.open === "mov") return modalMov(d.id);
   const act = d.act;

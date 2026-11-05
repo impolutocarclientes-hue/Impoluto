@@ -15,7 +15,8 @@ export const DEF_COSTOS = {
   provFactura: false,     // ¿el proveedor te da factura?
   armadoFactura: false,   // ¿el fulfillment te da factura?
   envioPedido: 0,         // envío que pagás vos por pedido (todos)
-  envioSucursal: 0,       // envío gratis a sucursal que pagás vos (packs de 2 y 3)
+  envioSucursal: 0,       // respaldo si un pedido a sucursal no tiene destino
+  envioDomicilio: 0,      // envío gratis a domicilio que pagaste vos (packs, 24/10 al 1/11)
   armadoPedido: 0,        // caja, etiqueta, depósito por pedido
   recargoAds: 0,          // % extra sobre el gasto en Meta (impuestos de la tarjeta, etc.)
   ganPct: 15,             // provisión de Ganancias sobre la ganancia
@@ -57,12 +58,34 @@ export function unidadesPrincipales(o, prods) {
 }
 
 // Cuánto se lleva cada cosa de un pedido pagado (la cuenta de ESA, pedido por pedido).
+// ---------- Envío a sucursal (Andreani vía Senyfull) ----------
+// Tarifas cotizadas en Senyfull («Lo que ve el comprador») el 5/11/2026, hasta 0,5 kg (un pack de 3 pesa 0,45 kg).
+export const TARIFAS_SUCURSAL = { fecha: "2026-11-05", porCp: {"1417":7887,"1437":7887,"1439":7887,"1602":7887,"1607":7887,"1613":7887,"1614":7887,"1625":7887,"1627":7887,"1636":7887,"1641":7887,"1653":7887,"1661":7887,"1662":7887,"1665":7887,"1685":7887,"1704":7887,"1708":7887,"1721":7887,"1744":7887,"1748":7887,"1763":7887,"1765":7887,"1804":7887,"1824":7887,"1832":7887,"1870":7887,"1874":7887,"1875":7887,"1884":7887,"1914":7887,"2800":7887,"2804":7887,"6600":7887,"6700":7887,"7130":7887,"7223":7887,"2000":9679,"2011":9679,"2125":9679,"2126":9679,"2170":9679,"2204":9679,"2611":9679,"2700":9679,"2705":9679,"2820":9679,"2900":9679,"3100":9679,"3102":9679,"3106":9679,"3107":9679,"3150":9679,"3560":9679,"3580":9679,"5006":9679,"5010":9679,"5013":9679,"5107":9679,"5176":9679,"5186":9679,"5194":9679,"5800":9679,"6300":9679,"6303":9679,"6304":9679,"6409":9679,"6550":9679,"7000":9679,"7167":9679,"7513":9679,"7600":9679,"3300":10603,"3380":10603,"3400":10603,"3450":10603,"3460":10603,"3600":10603,"3700":10603,"4000":10603,"4200":10603,"5400":10603,"5501":10603,"5600":10603,"5700":10603,"6417":10603,"7105":10603,"8000":10603,"8003":10603,"8109":10603,"8153":10603,"8170":10603,"8201":10603,"8300":10603,"8304":10603,"8309":10603,"8316":10603,"8319":10603,"8324":10603,"8332":10603,"8353":10603,"8364":10603,"8370":10603,"8400":10603,"8430":10603,"9000":10603,"9011":10603,"9020":10603,"9100":10603,"4400":10631,"4412":10631,"4560":10631,"4600":10631} };
+// Si el código postal no está en la tabla (o no tiene sucursal cerca): la tarifa de su zona.
+export function tarifaSucursal(cp, prov, tabla = TARIFAS_SUCURSAL) {
+  const c = String(cp || "").replace(/\D/g, "").slice(0, 4);
+  if (c && tabla.porCp[c]) return tabla.porCp[c];
+  const p = String(prov || "").toLowerCase();
+  if (/^1\d{3}$/.test(c) || /ciudad aut|capital federal|caba/.test(p)) return 7887; // AMBA
+  if (/salta|jujuy|tierra del fuego/.test(p)) return 10631;
+  if (/c[oó]rdoba|santa fe|entre r[ií]os|la pampa|buenos aires/.test(p)) return 9679; // Buenos Aires: interior cercano
+  if (p) return 10603;
+  return null; // sin dato de destino
+}
+
 // ¿Este pedido tuvo envío gratis a sucursal que pagás vos? Si sabemos el método de envío: «sucursal» y gratis.
 // En pedidos viejos sin ese dato: gratis y de 2 o más unidades (los packs con envío gratis a sucursal).
 export function pagasEnvioSucursal(o, prods) {
   if (n(o.ship) > 0) return false;
   if (o.sl) return /sucursal/i.test(o.sl);
   return unidadesPrincipales(o, prods) >= 2;
+}
+// Lo que pagás vos de envío en un pedido con envío gratis para el cliente.
+export function envioQuePagas(o, cfg, prods) {
+  if (n(o.ship) > 0) return 0; // lo pagó el cliente
+  if (pagasEnvioSucursal(o, prods)) return tarifaSucursal(o.cp, o.prov) ?? n(cfg.envioSucursal);
+  if (o.sl && /domicilio/i.test(o.sl) && unidadesPrincipales(o, prods) >= 2) return n(cfg.envioDomicilio);
+  return 0;
 }
 export function costoPedido(o, cfgIn, prods) {
   const cfg = costosCfg(cfgIn);
@@ -72,8 +95,8 @@ export function costoPedido(o, cfgIn, prods) {
   // Costo por unidad: el del lote del que salió (FIFO) si está calculado; si no, el costo base del producto.
   const producto = sum(o.li, (l) => n(l.cq) * (l._cu != null ? l._cu : n(prodCfg(prods, l.pid).costo)));
   const fisico = o.li.some((l) => n(l.cq) > 0 && prodCfg(prods, l.pid).tipo !== "digital");
-  // Envío: lo fijo por pedido + el envío gratis a sucursal que pagás vos (packs de 2 y 3).
-  const envio = fisico ? n(cfg.envioPedido) + (pagasEnvioSucursal(o, prods) ? n(cfg.envioSucursal) : 0) : 0;
+  // Envío: lo fijo por pedido + el envío gratis que pagás vos (a sucursal, según el destino; a domicilio, el monto cargado).
+  const envio = fisico ? n(cfg.envioPedido) + envioQuePagas(o, cfg, prods) : 0;
   const armado = fisico ? n(cfg.armadoPedido) : 0;
   const mpPct = transfer ? 0 : cfg.mpCuotas && units >= n(cfg.mpDesde || 1) ? n(cfg.mpPctCuotas) : n(cfg.mpPctSin);
   // Si el pedido está vinculado a su cobro de Mercado Pago, usamos la comisión real de ese cobro.

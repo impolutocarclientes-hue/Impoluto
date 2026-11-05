@@ -205,10 +205,14 @@ test("Costo por lote (FIFO): cada venta usa el costo de la compra de la que sali
 test("Envío gratis a sucursal y dólar del día", () => {
   const li = (q) => ({ pid: "R", vid: "v", sku: "", ti: "Restaurador", vt: "", q, cq: q, tot: 30000 * q, orig: 30000 * q });
   const o = (id, q, extra) => ({ id, n: id, c: "2026-11-02T15:00:00Z", p: "2026-11-02T15:00:00Z", x: null, t: false, f: "PAID", g: "mp", s: "web", tot: 30000 * q, cur: 30000 * q, disc: 0, ship: 0, ref: 0, dc: [], li: [li(q)], ...extra });
-  const cfg = { regimen: "mono", mpPctSin: 0, mpCuotas: false, shopifyPct: 0, iibbPct: 0, envioSucursal: 5000, armadoPedido: 0 };
-  assert.equal(M.costoPedido(o("a", 2, { sl: "Envío gratis a sucursal Andreani" }), cfg, {}).envio, 5000);
+  const cfg = { regimen: "mono", mpPctSin: 0, mpCuotas: false, shopifyPct: 0, iibbPct: 0, envioSucursal: 5000, envioDomicilio: 6000, armadoPedido: 0 };
+  assert.equal(M.costoPedido(o("a", 2, { sl: "Envío gratis a sucursal Andreani" }), cfg, {}).envio, 5000); // sin destino: respaldo
+  assert.equal(M.costoPedido(o("a2", 2, { sl: "Andreani- Envío a sucursal · X", cp: "8300", prov: "Neuquén" }), cfg, {}).envio, 10603);
+  assert.equal(M.costoPedido(o("a3", 3, { sl: "Andreani- Envío a sucursal · X", cp: "1832" }), cfg, {}).envio, 7887);
+  assert.equal(M.costoPedido(o("a4", 2, { sl: "Andreani- Envío a sucursal · X", cp: "9999", prov: "Salta" }), cfg, {}).envio, 10631); // CP no cotizado: zona
   assert.equal(M.costoPedido(o("b", 1, { sl: "Andreani a domicilio", ship: 4500 }), cfg, {}).envio, 0); // lo pagó el cliente
-  assert.equal(M.costoPedido(o("c", 2, { sl: "Envío a domicilio gratis" }), cfg, {}).envio, 0);       // no es sucursal
+  assert.equal(M.costoPedido(o("c", 2, { sl: "Envío a domicilio" }), cfg, {}).envio, 6000);  // domicilio gratis de pack: lo cargado
+  assert.equal(M.costoPedido(o("c2", 1, { sl: "Envío a domicilio" }), cfg, {}).envio, 0);
   assert.equal(M.costoPedido(o("d", 3, {}), cfg, {}).envio, 5000);  // pedido viejo sin método: pack y gratis
   assert.equal(M.costoPedido(o("e", 1, {}), cfg, {}).envio, 0);
   // Dólar por día: cada fila de Meta con su cotización
