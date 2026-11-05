@@ -1,5 +1,5 @@
 import { redis, ORDERS, ADS, ADMETA, MPPAY, isAuthed, isCron, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
-import { fetchOrders, fetchSessions, fetchProductTitles } from "./_shopify.js";
+import { fetchOrders, fetchSessions, fetchProductTitles, fetchDestinos } from "./_shopify.js";
 import { actualizarDolares } from "./_dolar.js";
 import { insightsByDay, frequency7d, campaigns, accountInfo } from "./_meta.js";
 import { fetchPayments, refreshToken, tokenSoloLectura, tieneEscritura } from "./_mp.js";
@@ -19,13 +19,16 @@ async function hsetChunks(key, entries) {
 }
 
 // Versión de los datos que se guardan de cada pedido: si cambia, se vuelven a traer los últimos 60 días.
-const VERSION_PEDIDO = 2; // 2: método de envío
+const VERSION_PEDIDO = 3; // 2: método de envío · 3: código postal y provincia de destino
 export async function syncShopify(cfg, prev, opts = {}) {
   // Primera vez: los últimos 60 días (lo que deja read_orders). Después: lo que cambió desde el último sync, con 2 h de margen.
   const since = opts.full || !prev || !prev.lastUpdated || (prev.v || 1) < VERSION_PEDIDO
     ? iso(daysAgo(Number(opts.days) || 60)) + "T00:00:00Z"
     : new Date(new Date(prev.lastUpdated).getTime() - 2 * 3600 * 1000).toISOString();
   const { orders, complete } = await fetchOrders(cfg, since);
+  // Destino (código postal y provincia) para calcular el envío a sucursal. Si Shopify no lo deja, se sigue igual.
+  const dest = orders.length ? await fetchDestinos(cfg, orders.map((o) => o.id)) : {};
+  if (!dest._error) orders.forEach((o) => { if (dest[o.id]) { o.cp = dest[o.id].cp; o.prov = dest[o.id].prov; } });
   await hsetChunks(ORDERS, orders.map((o) => [o.id, o]));
   const lastUpdated = complete ? new Date().toISOString() : (orders.length ? orders[orders.length - 1].u || since : since);
   let sessions = null;
@@ -35,7 +38,7 @@ export async function syncShopify(cfg, prev, opts = {}) {
     const titles = await fetchProductTitles(cfg);
     await redis.hset(ADMETA, { prodTitles: JSON.stringify(titles || {}) });
   }
-  return { count: orders.length, complete, lastUpdated, sessions: !!sessions, v: complete ? VERSION_PEDIDO : (prev && prev.v) || 1 };
+  return { count: orders.length, complete, lastUpdated, sessions: !!sessions, destinos: dest._error ? "sin permiso: " + dest._error : Object.keys(dest).length, v: complete ? VERSION_PEDIDO : (prev && prev.v) || 1 };
 }
 
 export async function syncMeta(cfg, prev, opts = {}) {

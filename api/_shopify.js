@@ -199,3 +199,17 @@ export async function fetchProductTitles(cfg) {
     return out;
   } catch (e) { return { _error: e.message }; }
 }
+
+// Código postal y provincia de destino de cada pedido (para el costo de envío a sucursal).
+// Es un dato del cliente: si la app de Shopify no tiene ese permiso, devuelve {} y no rompe nada.
+export async function fetchDestinos(cfg, orderIds) {
+  const out = {};
+  try {
+    for (let i = 0; i < orderIds.length; i += 100) {
+      const ids = orderIds.slice(i, i + 100).map((id) => "gid://shopify/Order/" + id);
+      const d = await gql(cfg, `query($ids:[ID!]!){ nodes(ids:$ids){ ... on Order { id shippingAddress{ zip province provinceCode } } } }`, { ids });
+      (d.nodes || []).forEach((n) => { if (n && n.shippingAddress) out[gid(n.id)] = { cp: String(n.shippingAddress.zip || "").replace(/\D/g, "").slice(0, 4), prov: n.shippingAddress.province || n.shippingAddress.provinceCode || "" }; });
+    }
+    return out;
+  } catch (e) { return { _error: e.message }; }
+}
