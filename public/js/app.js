@@ -190,9 +190,9 @@ function block(id, title, inner, right = "") { return `<section class="block" id
 
 // ============ vistas ============
 const VIEWS = [
-  ["dashboard", "Tu plata", "dash"], ["anuncios", "Anuncios", "ads"], ["caja", "Caja", "caja"],
-  ["impuestos", "Impuestos", "imp"], ["socios", "Socios", "socios"], ["gastos", "Gastos", "gastos"],
-  ["stock", "Stock", "box"], ["facturas", "Facturación", "imp"], ["calculadora", "Calculadora", "calc"], ["config", "Configuración", "cfg"],
+  ["dashboard", "Dashboard", "dash"], ["anuncios", "Anuncios", "ads"], ["caja", "Cashflow", "caja"],
+  ["impuestos", "Impuestos", "imp"], ["socios", "Socios", "socios"], ["gastos", "Tracker gastos", "gastos"],
+  ["stock", "Control de stock", "box"], ["facturas", "Facturador", "imp"], ["calculadora", "Calculadora de precios", "calc"], ["config", "Configuración", "cfg"],
 ];
 function sideHTML() {
   const c = S.conn || {};
