@@ -281,3 +281,8 @@ test("producto con Factura A del proveedor: su IVA es crédito", () => {
   const con = M.costoPedido(o, costos, p2);
   assert.ok(Math.abs(con.ivaCredito - sin.ivaCredito - 210) < 1e-6);
 });
+
+test("Ingresos brutos también sobre el envío que pagó el cliente", () => {
+  const c = M.costoPedido(order(7, "2026-10-10", 1, 42990 + 10000, { ship: 10000 }), costos, prods);
+  assert.ok(Math.abs(c.iibb - ((42990 + 10000) / 1.21) * (costos.iibbPct / 100)) < 1e-6);
+});

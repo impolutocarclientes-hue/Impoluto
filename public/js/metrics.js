@@ -112,8 +112,9 @@ export function costoPedido(o, cfgIn, prods) {
   const cobrado = Math.max(0, n(o.tot) - n(o.ref));
   const mp = o._mp ? n(o._mp.com) : (cobrado * mpPct) / 100;
   const shopify = (cobrado * n(cfg.shopifyPct)) / 100; // Shopify cobra sobre el total
-  // Ingresos brutos: el responsable inscripto lo paga sobre el precio sin IVA.
-  const iibb = ((cfg.regimen !== "mono" ? venta / 1.21 : venta) * n(cfg.iibbPct)) / 100;
+  // Ingresos brutos: sobre lo facturado (envío del cliente incluido); el responsable inscripto, sin IVA.
+  const baseIibb = venta + envioCliente; // el envío que pagó el cliente también se factura
+  const iibb = ((cfg.regimen !== "mono" ? baseIibb / 1.21 : baseIibb) * n(cfg.iibbPct)) / 100;
   let ivaDebito = 0, ivaCredito = 0, ivaPagar = 0;
   if (cfg.regimen !== "mono") {
     ivaDebito = iva(venta + envioCliente) * (1 - n(cfg.beneficioIva) / 100);
