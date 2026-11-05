@@ -550,7 +550,8 @@ function viewCalc() {
     row("Insumos / armado", "Caja, etiqueta y armado", inp("insumos", "$")) +
     row("¿El armado te da factura?", out("ivaIns", "IVA " + ars(r.iva.empaquetajeSiTuviera)), seg("ivaInsumos", "Sí", "No")))}
   ${card("Envío y publicidad",
-    row("Envío", out("ivaEnv", "IVA " + ars(r.iva.envio) + " (siempre factura)"), inp("envio", "$"), "Lo que pagás de envío por pedido.") +
+    row("Envío gratis que pagás vos", out("ivaEnv", "IVA a favor " + ars(r.iva.envio)), inp("envio", "$"), "Lo que pagás de envío por pedido. 0 si lo paga el comprador.") +
+    row("Envío que paga el comprador", out("ivaEnvC", "IVA a favor " + ars(r.iva.envioComprador) + " · también suma IVA de venta"), inp("envioComprador", "$"), "Va en la factura y la logística te lo factura: te da crédito de IVA aunque lo pague el cliente.") +
     row("CPA objetivo", out("cpaArs", ars(r.cpaArs) + " en pesos"), inp("cpaUsd", "US$"), "Lo que esperás pagarle a Meta por venta."))}
   ${card("Comisiones e impuestos",
     row("Comisiones (Mercado Pago + Shopify)", "En cuotas", inp("comision", "%"), "Mercado Pago + la plataforma, en 3 cuotas.") +

@@ -41,3 +41,11 @@ test("calculadora igual a ESA, con transferencia", () => {
 test("CPA por cliente potencial", () => {
   assert.deepEqual(cpaPotencial(0.5, 2500), { inversion: 1250, ventas: 250, cpa: 5 });
 });
+
+test("envío que paga el comprador: crédito de IVA y también IVA de venta, IIBB y comisión", () => {
+  const sin = calcular({ ...base, envio: 0 });
+  const con = calcular({ ...base, envio: 0, envioComprador: 12100 });
+  assert.ok(Math.abs(con.iva.envioComprador - 2100) < 1e-6);
+  assert.ok(Math.abs(con.ri.totalIvaVenta - sin.ri.totalIvaVenta - 2100) < 1e-6);
+  assert.ok(con.ri.totalIvaCompra > sin.ri.totalIvaCompra + 2100 - 1e-6);
+});

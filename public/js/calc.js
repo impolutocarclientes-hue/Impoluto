@@ -8,7 +8,7 @@ export const CALC_DEFAULTS = {
   tc: 1670, transferencia: false,
   costoProducto: 6500, ivaProducto: false,
   insumos: 1200, ivaInsumos: false,
-  envio: 2000, cpaUsd: 10,
+  envio: 2000, envioComprador: 0, cpaUsd: 10,
   comision: 14.4, iibb: 2, facturado: 50,
   precio: 44999,
 };
@@ -17,15 +17,18 @@ export function calcular(input) {
   const e = { ...CALC_DEFAULTS, ...input };
   const a = num(e.tc), o = !!e.transferencia, r = num(e.costoProducto), s = num(e.insumos), i = num(e.envio),
     c = num(e.cpaUsd), l = num(e.comision) / 100, d = num(e.iibb) / 100, u = num(e.facturado) / 100, m = num(e.precio);
+  // Envío que paga el comprador: entra en la factura (IVA de venta, IIBB y comisión de cobro lo incluyen) y la
+  // logística te lo cobra con factura (crédito de IVA). La plata va y viene: no es ingreso ni costo.
+  const sc = num(e.envioComprador), hs = (sc / 1.21) * 0.21;
 
   const p = (r / 1.21) * 0.21, b = e.ivaProducto ? p : 0;           // IVA producto
   const x = (s / 1.21) * 0.21, f = e.ivaInsumos ? x : 0;            // IVA empaquetaje
   const h = (i / 1.21) * 0.21;                                      // IVA envío (siempre factura)
   const v = c * a;                                                  // CPA objetivo en pesos
-  const j = (l / 1.21) * 0.21, g = m * j;                           // IVA de las comisiones
-  const N = r + i + v + m * l + s + m * d;                          // total costos
-  const P = h + b + f + g;                                          // total IVA compra
-  const y = (m / 1.21) * 0.21;                                      // total IVA venta
+  const j = (l / 1.21) * 0.21, g = (m + sc) * j;                           // IVA de las comisiones
+  const N = r + i + v + m * l + s + m * d + sc * (l + d);                          // total costos
+  const P = h + b + f + g + hs;                                          // total IVA compra
+  const y = ((m + sc) / 1.21) * 0.21;                                      // total IVA venta
   const C = y * u - P;                                              // IVA a abonar
   const A = m - N - C;                                              // utilidad mínima (cuotas), RI
   const $ = 0.9 * m;                                                // precio con 10 % off por transferencia
@@ -34,7 +37,7 @@ export function calcular(input) {
   const E = $ - k - S - U, L = E / $;                               // transferencia, monotributo
   const G = A / m, B = o ? V : G, T = B * m, q = (A + T) / 2;
   const R = (v + q) / a;                                            // CPA break even USD, RI
-  const w = r + i + v + m * (l + d) + s;                            // total costos monotributo
+  const w = r + i + v + m * (l + d) + s + sc * (l + d);                            // total costos monotributo
   const sug = 0.35 * w + w;                                         // precio sugerido (monotributo)
   const D = m - w, K = D / m;
   const O = (v + D) / a;                                            // CPA break even USD, monotributo
@@ -42,7 +45,7 @@ export function calcular(input) {
 
   return {
     cpaArs: v,
-    iva: { producto: b, productoSiTuviera: p, empaquetaje: f, empaquetajeSiTuviera: x, envio: h, comisiones: g },
+    iva: { producto: b, productoSiTuviera: p, empaquetaje: f, empaquetajeSiTuviera: x, envio: h, envioComprador: hs, comisiones: g },
     totalCostos: N,
     ri: {
       totalCostos: N, totalIvaCompra: P, totalIvaVenta: y, ivaAAbonar: C,
