@@ -61,7 +61,14 @@ const unesc = (s) => String(s || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
 
 async function soap(url, action, body, fetchImpl = fetch) {
   const env = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>${body}</soap:Body></soap:Envelope>`;
-  const r = await fetchImpl(url, { method: "POST", headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: action }, body: env, signal: AbortSignal.timeout(25000) });
+  let r;
+  try {
+    r = await fetchImpl(url, { method: "POST", headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: action }, body: env, signal: AbortSignal.timeout(25000) });
+  } catch (e) {
+    // Diagnóstico: el motivo real de la falla de conexión (TLS, DNS, timeout...).
+    const c = e && e.cause;
+    throw new Error(`No se pudo conectar con ARCA (${new URL(url).host}): ${(c && (c.code || c.name)) || e.name} ${(c && c.message) || e.message}`);
+  }
   const txt = await r.text();
   const fault = tag(txt, "faultstring");
   if (fault) throw new Error("ARCA: " + unesc(fault));
