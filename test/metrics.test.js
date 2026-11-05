@@ -211,10 +211,10 @@ test("Envío gratis a sucursal y dólar del día", () => {
   const cfg = { regimen: "mono", mpPctSin: 0, mpCuotas: false, shopifyPct: 0, iibbPct: 0, envioSucursal: 5000, armadoPedido: 0 };
   assert.equal(M.costoPedido(o("a", 2, { sl: "Envío gratis a sucursal Andreani" }), cfg, {}).envio, 5000); // sin destino: respaldo
   assert.equal(M.costoPedido(o("a2", 2, { sl: "Andreani- Envío a sucursal · X", cp: "8300", prov: "Neuquén" }), cfg, {}).envio, 10617);
-  assert.equal(M.costoPedido(o("a3", 3, { sl: "Andreani- Envío a sucursal · X", cp: "1832" }), cfg, {}).envio, 7888);
+  assert.equal(M.costoPedido(o("a3", 3, { sl: "Andreani- Envío a sucursal · X", cp: "1832" }), cfg, {}).envio, 5800);
   assert.equal(M.costoPedido(o("a4", 2, { sl: "Andreani- Envío a sucursal · X", cp: "9999", prov: "Salta" }), cfg, {}).envio, 10634); // CP no cotizado: zona
   assert.equal(M.costoPedido(o("b", 1, { sl: "Andreani a domicilio", ship: 4500 }), cfg, {}).envio, 0); // lo pagó el cliente
-  assert.equal(M.costoPedido(o("c", 2, { sl: "Envío a domicilio", cp: "1832" }), cfg, {}).envio, 7888); // gratis: lo pagás vos, a sucursal
+  assert.equal(M.costoPedido(o("c", 2, { sl: "Envío a domicilio", cp: "1832" }), cfg, {}).envio, 5800); // gratis: lo pagás vos, a sucursal
   assert.equal(M.costoPedido(o("c2", 1, { sl: "Envío a domicilio", ship: 5000, cp: "1832" }), cfg, {}).envio, 0); // lo pagó el cliente: no se resta
   assert.equal(M.costoPedido(o("d", 3, {}), cfg, {}).envio, 5000);  // pedido viejo sin método: pack y gratis
   assert.equal(M.costoPedido(o("e", 1, { ship: 4000 }), cfg, {}).envio, 0);
@@ -233,7 +233,11 @@ test("Ventas sin el envío que pagó el cliente; solo se resta el envío gratis"
   assert.equal(c.envio, 0);
   const g = M.costoPedido({ ...o, tot: 67990, cur: 67990, ship: 0, sl: "Andreani- Envío a sucursal", cp: "1824" }, cfg, {});
   assert.equal(g.venta, 67990);
-  assert.equal(g.envio, 7888);
+  assert.equal(g.envio, 5800);
+  assert.equal(M.tarifaSucursal("1429", "Ciudad Autónoma de Buenos Aires"), 5200);
+  assert.equal(M.tarifaSucursal("1744", "Buenos Aires"), 5900); // Moreno
+  assert.equal(M.tarifaSucursal("1900", "Buenos Aires"), 7400); // La Plata
+  assert.equal(M.tarifaSucursal("2800", "Buenos Aires"), 7888); // fuera del AMBA: zona 1 general
 });
 
 test("Anuncios: Meta da el valor de compra en dólares; ROAS y ganancia en el mismo idioma", () => {
