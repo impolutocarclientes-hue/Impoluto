@@ -75,8 +75,10 @@ const DEF_CATS = [
 const socios = () => (Array.isArray(S.app.socios) && S.app.socios.length >= 2 ? S.app.socios.slice(0, 2) : ["Francisco", "Socio"]);
 const cats = () => (Array.isArray(S.app.cats) && S.app.cats.length ? S.app.cats : DEF_CATS);
 const catOf = (g) => cats().find((c) => c.id === g.catId) || cats().find((c) => c.name === g.cat) || { id: "otros", name: g.cat || "Otros", color: "#8C7F72" };
-const cfg = () => M.costosCfg(S.costos);
-const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: S.costos, prods: S.prods, gastos: S.gastos, movs: S.movs, stockMovs: S.stockMovs || [], fifo: S.fifo });
+// Costos de la configuración + el % real promedio de Mercado Pago (para pedidos que no se pudieron vincular a su cobro).
+const costosVivos = () => ({ ...S.costos, _mpProm: S.mpPcts && S.mpPcts.todos && S.mpPcts.todos.n >= 10 ? S.mpPcts.todos.pct : null });
+const cfg = () => M.costosCfg(costosVivos());
+const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: costosVivos(), prods: S.prods, gastos: S.gastos, movs: S.movs, stockMovs: S.stockMovs || [], fifo: S.fifo });
 const money = (v) => (S.cur === "USD" ? usd(nn(v) / nn(cfg().dolar || 1)) : ars(v));
 
 function rangeOf(p) {

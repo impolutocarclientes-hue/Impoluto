@@ -95,15 +95,18 @@ export function costoPedido(o, cfgIn, prods) {
   // Envío: lo fijo por pedido + el envío gratis que pagás vos (a sucursal, según el destino; a domicilio, el monto cargado).
   const envio = fisico ? n(cfg.envioPedido) + envioQuePagas(o, cfg, prods) : 0;
   const armado = fisico ? n(cfg.armadoPedido) : 0;
-  const mpPct = transfer ? 0 : cfg.mpCuotas && units >= n(cfg.mpDesde || 1) ? n(cfg.mpPctCuotas) : n(cfg.mpPctSin);
-  // Si el pedido está vinculado a su cobro de Mercado Pago, usamos la comisión real de ese cobro.
-  const mp = o._mp ? n(o._mp.com) : (venta * mpPct) / 100;
-  const shopify = (venta * n(cfg.shopifyPct)) / 100;
-  const iibb = (venta * n(cfg.iibbPct)) / 100;
+  // Mercado Pago: la comisión real del cobro vinculado. Si no se vinculó, el % real promedio de tus cobros
+  // (o el estimado de la configuración si todavía no hay cobros). MP cobra sobre el total, envío incluido.
+  const mpPct = transfer ? 0 : cfg._mpProm != null ? n(cfg._mpProm) : cfg.mpCuotas && units >= n(cfg.mpDesde || 1) ? n(cfg.mpPctCuotas) : n(cfg.mpPctSin);
+  const cobrado = Math.max(0, n(o.tot) - n(o.ref));
+  const mp = o._mp ? n(o._mp.com) : (cobrado * mpPct) / 100;
+  const shopify = (cobrado * n(cfg.shopifyPct)) / 100; // Shopify cobra sobre el total
+  // Ingresos brutos: el responsable inscripto lo paga sobre el precio sin IVA.
+  const iibb = ((cfg.regimen !== "mono" ? venta / 1.21 : venta) * n(cfg.iibbPct)) / 100;
   let ivaDebito = 0, ivaCredito = 0, ivaPagar = 0;
   if (cfg.regimen !== "mono") {
     ivaDebito = iva(venta) * (1 - n(cfg.beneficioIva) / 100);
-    ivaCredito = iva(mp + shopify) + iva(envio) + (cfg.armadoFactura ? iva(armado) : 0) + (cfg.provFactura ? iva(producto) : 0);
+    ivaCredito = iva(mp) + iva(envio) + (cfg.armadoFactura ? iva(armado) : 0) + (cfg.provFactura ? iva(producto) : 0);
     ivaPagar = ivaDebito - ivaCredito;
   }
   const cobroImp = mp + shopify + iibb + ivaPagar;
@@ -157,8 +160,8 @@ export function mpPctReales(pays, desde) {
   if (!pays || !pays.length) return null;
   const l = pays.filter((p) => esCobroVenta(p) && p.st === "approved" && dayOf(p.a || p.c) >= desde);
   const grupo = (f) => { const g = l.filter(f); const m = sum(g, (p) => n(p.monto)); return { n: g.length, pct: m ? (sum(g, (p) => n(p.comision)) / m) * 100 : null }; };
-  const uno = grupo((p) => n(p.cu) <= 1), cuotas = grupo((p) => n(p.cu) > 1);
-  return l.length ? { uno, cuotas, n: l.length } : null;
+  const uno = grupo((p) => n(p.cu) <= 1), cuotas = grupo((p) => n(p.cu) > 1), todos = grupo(() => true);
+  return l.length ? { uno, cuotas, todos, n: l.length } : null;
 }
 
 // Vincula cada pedido de Shopify con su cobro de Mercado Pago (mismo monto, pocos minutos de diferencia).
@@ -243,6 +246,9 @@ export function resumen({ orders, ads, meta, costos, prods, pays }, from, to) {
     roas: spendBase ? ventas / spendBase : 0,
     trueRoas: anuncios ? netas / anuncios : 0,
     beRoas: dineroPor > 0 ? ventas / dineroPor : 0,
+    // Meta cuenta en el valor de compra el envío que pagó el cliente: su equilibrio tiene que incluirlo.
+    ventasConEnvio: ventas + sum(pagados, (o) => n(o.ship)),
+    beRoasPixel: dineroPor > 0 ? (ventas + sum(pagados, (o) => n(o.ship))) / dineroPor : 0,
     cpa: nPag ? anuncios / nPag : 0,
     cpaUsd: nPag ? anuncios / nPag / (kProm || n(cfg.dolar)) : 0,
     cpaMax: nPag ? dineroPor / nPag : 0,
@@ -298,7 +304,7 @@ export function porProducto(ctx, from, to) {
       const p = (m[key] = m[key] || { pid: l.pid, titulo: l.ti, ventas: 0, unidades: 0, pedidos: 0, costo: 0, quedo: 0, anuncios: 0 });
       const share = n(l.tot) / totLineas;
       const prin = principales.includes(l);
-      const costoLinea = n(l.cq) * n(prodCfg(ctx.prods, l.pid).costo);
+      const costoLinea = n(l.cq) * (l._cu != null ? l._cu : n(prodCfg(ctx.prods, l.pid).costo));
       const logistica = prin ? ((c.envio + c.armado) * n(l.tot)) / totPrin : 0;
       p.ventas += n(l.tot) * (c.venta / (totLineas || 1));
       p.unidades += n(l.cq); p.pedidos++;
@@ -335,12 +341,14 @@ export function ofertas(ctx, from, to) {
   return Object.values(grupos).sort((a, b) => a.oferta - b.oferta).map((g) => {
     const precio = g.venta / g.pedidos;
     const antes = g.margen / g.pedidos - fijosPorPedido;
-    const maxUsd = antes / n(cfg.dolar);
+    const dolar = r.dolarProm || n(cfg.dolar);
+    const maxUsd = antes / dolar;
     const objetivo = n(cfg.cpaObjetivo[g.oferta]);
     // El margen es lineal en el precio: lo evaluamos en dos precios y despejamos el que llega al objetivo.
-    const f = (P) => { const fake = { ...g.ej, tot: P, ref: 0, li: g.ej.li.map((l) => ({ ...l, tot: n(l.tot) > 0 ? P : 0 })) }; return costoPedido(fake, cfg, ctx.prods).margen - fijosPorPedido; };
+    // Pedido de ejemplo al precio P (sin envío del cliente, que no es venta; comisión de MP estimada, que acompaña al precio).
+    const f = (P) => { const fake = { ...g.ej, _mp: null, tot: P + n(g.ej.ship), ref: 0, li: g.ej.li.map((l) => ({ ...l, tot: n(l.tot) > 0 ? P : 0 })) }; return costoPedido(fake, cfg, ctx.prods).margen - fijosPorPedido; };
     const m1 = f(precio), m2 = f(precio + 1000), pend = (m2 - m1) / 1000;
-    const precioObjetivo = objetivo && pend > 0 ? precio + (objetivo * n(cfg.dolar) - m1) / pend : 0;
+    const precioObjetivo = objetivo && pend > 0 ? precio + (objetivo * dolar - m1) / pend : 0;
     return { ...g, precio, antes, maxUsd, maxArs: antes, objetivo, falta: objetivo ? objetivo - maxUsd : 0, precioObjetivo, ok: !objetivo || maxUsd >= objetivo };
   });
 }
@@ -360,7 +368,8 @@ export function anunciosSemaforo(ctx, from, to, refFrom, refTo) {
   const cfg = costosCfg(ctx.costos);
   const conv = adsArs(ctx.ads, ctx.meta, cfg);
   const ref = resumen(ctx, refFrom || from, refTo || to);
-  const ratio = ref.ventas ? (ref.margenAntes - ref.fijos) / ref.ventas : 0; // de cada $ vendido, cuánto queda antes del anuncio
+  // De cada $ que Meta atribuye (incluye el envío que pagó el cliente), cuánto queda antes del anuncio.
+  const ratio = ref.ventasConEnvio ? (ref.margenAntes - ref.fijos) / ref.ventasConEnvio : 0;
   const freq = (ctx.meta && ctx.meta.freq) || { ad: {}, camp: {} };
   const m = {};
   ctx.ads.filter((a) => a.d >= from && a.d <= to).forEach((a) => {
@@ -392,7 +401,7 @@ export function anunciosSemaforo(ctx, from, to, refFrom, refTo) {
   const audiencias = { prospeccion: [], tibia: [], caliente: [] };
   lista.forEach((a) => audiencias[a.audiencia].push(a));
   Object.values(audiencias).forEach((l) => l.sort((a, b) => (a.cpaUsd == null ? 1e9 : a.cpaUsd) - (b.cpaUsd == null ? 1e9 : b.cpaUsd)));
-  return { lista, grupos, audiencias, ratio, beRoas: ref.beRoas };
+  return { lista, grupos, audiencias, ratio, beRoas: ref.beRoasPixel };
 }
 
 export function campanas(ctx, from, to) {
@@ -413,7 +422,7 @@ export function campanas(ctx, from, to) {
     const pausada = st && st !== "ACTIVE";
     const fase = /test|testeo|prueba/i.test(x.nombre) ? "Testeo" : "Escala";
     const ctr = x.imp ? x.clk / x.imp : 0;
-    const be = ref.beRoas;
+    const be = ref.beRoasPixel; // mismo idioma que el ROAS de Meta
     let consejo;
     if (pausada) consejo = "Está pausada en Meta: ya no gasta. Los números son de lo que gastó en estos días.";
     else if (!x.pu) consejo = ctr < 0.01 ? "Sin ventas y con CTR bajo: el anuncio no está enganchando. Probá otro gancho." : "Todavía sin ventas: dale más tiempo antes de juzgarla.";
@@ -588,7 +597,7 @@ export function costeoFIFO(orders, prods, stockMovs) {
     });
     (orders || []).forEach((o) => {
       if (o.t || estado(o) !== "pagado" || dayOf(o.c) < p.stockFecha) return;
-      o.li.forEach((l) => { if (l.pid === pid && n(l.cq) > 0) ev.push({ t: o.c, k: 1, tipo: "venta", cant: n(l.cq), linea: l }); });
+      o.li.forEach((l) => { if (l.pid === pid && n(l.cq) > 0) ev.push({ t: dayOf(o.c) + "T12:" + o.c.slice(11, 19), k: 1, tipo: "venta", cant: n(l.cq), linea: l }); });
     });
     ev.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : a.k - b.k));
     const lotes = [];

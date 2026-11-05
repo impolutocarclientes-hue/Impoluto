@@ -16,8 +16,11 @@ test("costo de un pedido: comisión sin cuotas para 1 unidad e IVA con beneficio
   assert.equal(c.mp, 42990 * 0.05);
   assert.equal(c.producto, 6500);
   const debito = (42990 / 1.21) * 0.21 * 0.5;
-  const credito = ((c.mp + c.shopify) / 1.21) * 0.21 + (2000 / 1.21) * 0.21;
+  // Crédito: comisión de MP y envío (Shopify factura desde el exterior: sin IVA).
+  const credito = (c.mp / 1.21) * 0.21 + (2000 / 1.21) * 0.21;
   assert.ok(Math.abs(c.ivaPagar - (debito - credito)) < 1e-6);
+  // Ingresos brutos del responsable inscripto: sobre el precio sin IVA.
+  assert.ok(Math.abs(c.iibb - (42990 / 1.21) * (costos.iibbPct / 100)) < 1e-6);
   assert.ok(Math.abs(c.margen - (42990 - 6500 - 2000 - c.mp - c.shopify - c.iibb - c.ivaPagar)) < 1e-6);
 });
 
@@ -245,4 +248,16 @@ test("Anuncios: Meta da el valor de compra en dólares; ROAS y ganancia en el mi
   assert.ok(sem.ganancia > 0.5); // vende 480.000 de pv en pesos contra 160.000 de gasto: gana
   const r = M.resumen(ctx, "2026-11-04", "2026-11-04");
   assert.equal(Math.round(r.meta.roasPixel * 100) / 100, 3);
+});
+
+test("Auditoría: MP sin vincular usa el % real; equilibrio del píxel incluye el envío del cliente", () => {
+  const li = { pid: "R", vid: "v", sku: "", ti: "R", vt: "", q: 1, cq: 1, tot: 50000, orig: 50000 };
+  const o = { id: "z", n: "#z", c: "2026-11-04T15:00:00Z", p: "2026-11-04T15:00:00Z", x: null, t: false, f: "PAID", g: "mp", s: "web", tot: 60000, cur: 60000, disc: 0, ship: 10000, ref: 0, dc: [], li: [li] };
+  const c = M.costoPedido(o, { _mpProm: 4.8, regimen: "ri", beneficioIva: 50, shopifyPct: 1, iibbPct: 3, armadoPedido: 0 }, {});
+  assert.equal(c.venta, 50000);
+  assert.ok(Math.abs(c.mp - 60000 * 0.048) < 1e-6);   // sobre el total cobrado, con el % real
+  assert.ok(Math.abs(c.shopify - 600) < 1e-6);
+  const r = M.resumen({ orders: [o], ads: [], meta: {}, costos: { _mpProm: 4.8, armadoPedido: 0 }, prods: {} }, "2026-11-04", "2026-11-04");
+  assert.ok(r.beRoasPixel > r.beRoas);
+  assert.ok(Math.abs(r.beRoasPixel / r.beRoas - 60000 / 50000) < 1e-9);
 });
