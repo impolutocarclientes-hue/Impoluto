@@ -1,5 +1,5 @@
 import { redis, ORDERS, ADS, ADMETA, MPPAY, isAuthed, isCron, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
-import { fetchOrders, fetchSessions } from "./_shopify.js";
+import { fetchOrders, fetchSessions, fetchProductTitles } from "./_shopify.js";
 import { insightsByDay, frequency7d, campaigns, accountInfo } from "./_meta.js";
 import { fetchPayments, refreshToken, tokenSoloLectura, tieneEscritura } from "./_mp.js";
 import { SECRETS } from "./_lib.js";
@@ -29,6 +29,8 @@ export async function syncShopify(cfg, prev, opts = {}) {
   if (opts.sessions !== false) {
     sessions = await fetchSessions(cfg, 90);
     if (sessions) await redis.hset(ADMETA, { sessions: JSON.stringify(sessions) });
+    const titles = await fetchProductTitles(cfg);
+    await redis.hset(ADMETA, { prodTitles: JSON.stringify(titles || {}) });
   }
   return { count: orders.length, complete, lastUpdated, sessions: !!sessions };
 }

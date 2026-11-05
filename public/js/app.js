@@ -103,6 +103,9 @@ async function loadData() {
   try {
     S.data = await api(`/api/data?from=2020-01-01&to=${M.addDays(today, 1)}`);
     // Cada pedido con su cobro real de Mercado Pago (comisión exacta en vez del %).
+    // Nombre actual de cada producto (aunque en el pedido haya quedado el nombre viejo).
+    const T = (S.data.meta && S.data.meta.prodTitles) || {};
+    if (!T._error) S.data.orders.forEach((o) => o.li.forEach((l) => { if (l.pid && T[l.pid] && T[l.pid] !== l.ti) { l.tiOrig = l.ti; l.ti = T[l.pid]; } }));
     S.data.orders = M.vincularPagos(S.data.orders, S.data.pays);
     S.data.ads = M.soloCampanasTienda(S.data.ads);
     S.mpPcts = M.mpPctReales(S.data.pays, M.addDays(today, -60));

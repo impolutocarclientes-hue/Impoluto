@@ -487,7 +487,7 @@ export function stockDetalle(ctx, hoy, rango) {
   const mesPasIni = addDays(mesIni, -1).slice(0, 8) + "01", mesPasFin = addDays(mesIni, -1);
   return pids.map((pid) => {
     const p = (ctx.prods || {})[pid] || {};
-    const nombre = p.nombre || titulos[pid] || pid;
+    const nombre = titulos[pid] || p.nombre || pid;
     const m = porDia[pid] || {};
     const r7 = suma(m, addDays(hoy, -7), ayer) / 7, r30 = suma(m, addDays(hoy, -30), ayer) / 30;
     const ritmo = r7 || r30;

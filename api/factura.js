@@ -1,6 +1,6 @@
 // Facturador: arma las facturas B de los pedidos pagados de Shopify y las emite en ARCA cuando el usuario toca «Emitir».
 // Nunca factura solo: cada emisión la pide el usuario desde la app.
-import { redis, SECRETS, ORDERS, isAuthed, deny, setupError, readJson, getSecrets, safeParse } from "./_lib.js";
+import { redis, SECRETS, ORDERS, ADMETA, isAuthed, deny, setupError, readJson, getSecrets, safeParse } from "./_lib.js";
 import { nuevaClave, certCorresponde, cuitValido, puntosDeVenta, ultimoNumero, consultar, solicitarCae, montos, ALICUOTAS, FACTURA_A, NC_A, FACTURA_B, NC_B, COND_IVA_A, esFactura, esNC, ncDe, letra } from "./_arca.js";
 import { facturaPdf, numeroFactura } from "./_pdf.js";
 import { contactoPedido, fetchOrder } from "./_shopify.js";
@@ -57,8 +57,10 @@ export function motivoNoFacturable(o, { conCuit = false } = {}) {
   return null;
 }
 
+let TITULOS = {};
 function itemsDe(o) {
   return (o.li || []).filter((l) => Number(l.cq) > 0).map((l) => {
+    l = { ...l, ti: (l.pid && TITULOS[l.pid]) || l.ti };
     const q = Number(l.q) || 0, cq = Number(l.cq);
     const tot = Number(l.tot) || 0;
     return { ti: l.ti + (l.vt && l.vt !== "Default Title" ? " - " + l.vt : ""), q: cq, tot: q > 0 && cq < q ? Math.round((tot * cq / q) * 100) / 100 : tot };
@@ -194,6 +196,7 @@ export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
   const sec = await getSecrets();
   let arca = sec.arca || null;
+  try { const t = await redis.hget(ADMETA, "prodTitles"); TITULOS = (typeof t === "string" ? JSON.parse(t) : t) || {}; if (TITULOS._error) TITULOS = {}; } catch { TITULOS = {}; }
 
   if (req.method === "GET") {
     const q = req.query || Object.fromEntries(new URL(req.url, "http://x").searchParams);

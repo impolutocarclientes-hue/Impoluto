@@ -10,6 +10,7 @@ const hh = (k) => { let h = store.get(k); if (!(h instanceof Map)) { h = new Map
 function run([c, ...a]) {
   switch (String(c).toUpperCase()) {
     case "HSET": { const h = hh(a[0]); for (let i = 1; i < a.length; i += 2) h.set(a[i], String(a[i + 1])); return 1; }
+    case "HGET": { const h = store.get(a[0]); return h instanceof Map && h.has(a[1]) ? h.get(a[1]) : null; }
     case "HGETALL": { const h = store.get(a[0]); return h instanceof Map ? [...h].flat() : []; }
     case "HDEL": { const h = store.get(a[0]); let n = 0; if (h instanceof Map) for (const f of a.slice(1)) n += h.delete(f) ? 1 : 0; return n; }
     case "DEL": { let n = 0; for (const k of a) n += store.delete(k) ? 1 : 0; return n; }

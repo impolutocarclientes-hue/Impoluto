@@ -180,3 +180,19 @@ export async function contactoPedido(cfg, orderId) {
     return { email: o.email || null, nombre: nombre || null };
   } catch { return null; }
 }
+
+// Nombre ACTUAL de cada producto (los pedidos guardan el nombre que tenía cuando se vendió).
+// Necesita el permiso read_products; si no está, devuelve null y se usan los nombres de los pedidos.
+export async function fetchProductTitles(cfg) {
+  try {
+    const out = {};
+    let after = null;
+    for (let i = 0; i < 10; i++) {
+      const d = await gql(cfg, `query($after:String){ products(first:100, after:$after){ pageInfo{ hasNextPage endCursor } nodes{ id title } } }`, { after });
+      d.products.nodes.forEach((p) => (out[gid(p.id)] = p.title));
+      if (!d.products.pageInfo.hasNextPage) break;
+      after = d.products.pageInfo.endCursor;
+    }
+    return out;
+  } catch (e) { return { _error: e.message }; }
+}
