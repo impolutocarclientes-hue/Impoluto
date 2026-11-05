@@ -531,44 +531,51 @@ function viewCalc() {
   const r = calcular(v);
   const mono = S.calcReg === "mono";
   const R = mono ? r.mono : r.ri;
-  const seg = (k, a, b) => `<div class="seg" style="width:100%"><button data-calcb="${k}" data-val="1" aria-pressed="${!!v[k]}">${a}</button><button data-calcb="${k}" data-val="0" aria-pressed="${!v[k]}">${b}</button></div>`;
-  const inp = (k, pre, step = "1") => `<div class="prefix${pre.length > 2 ? " w" : ""}"><em>${pre}</em><input class="in" type="text" inputmode="decimal" data-calc="${k}" value="${esc(String(v[k]).replace(".", ","))}"></div>`;
-  let o = 0;
-  const f = (label, t, body, small) => `<label class="f"><span>${label} ${tip(t)}</span>${body.replace('<input class="in ro"', `<input data-out="${o++}" class="in ro"`)}${small ? `<small data-out="${o++}">${small}</small>` : ""}</label>`;
+  const seg = (k, a, b) => `<div class="c2-seg"><button data-calcb="${k}" data-val="1" aria-pressed="${!!v[k]}">${a}</button><button data-calcb="${k}" data-val="0" aria-pressed="${!v[k]}">${b}</button></div>`;
+  const inp = (k, pre, big) => `<div class="c2-in${big ? " big" : ""}">${pre ? `<em>${pre}</em>` : ""}<input type="text" inputmode="decimal" data-calc="${k}" value="${esc(String(v[k] ?? "").replace(".", ","))}"></div>`;
+  const out = (key, val) => `<span class="c2-val" data-out="${key}">${val}</span>`;
+  const row = (label, sub, ctrl, t) => `<div class="c2-row"><div class="c2-l">${label}${t ? " " + tip(t) : ""}${sub ? `<small>${sub}</small>` : ""}</div><div class="c2-r">${ctrl}</div></div>`;
+  const card = (titulo, body, cls = "") => `<section class="c2-card ${cls}"><h2>${titulo}</h2>${body}</section>`;
   const pot = cpaPotencial(v.cpaCliente ?? 0.5, v.cantClientes ?? 2500);
-  let h = `<div class="content" style="padding-top:14px"><div><h2 style="margin:0;font-size:22px">Calculadora de costos</h2><p class="note">La planilla de la clase «Roas Breakeven», con los mismos campos y las mismas cuentas. Cargás tus costos una vez, cambiás el precio y te dice cuánto te queda, tu CPA break even y tu ROAS break even.</p></div>
-  <div class="calc"><div style="display:grid;gap:12px">
-  <div class="card"><div class="form">${f("T.C. USD", "El dólar de hoy: pasa el CPA a pesos.", inp("tc", "$"), `<a href="#" data-act="dolarhoy">Usar el dólar de ARQ de hoy</a>`)}${f("Transferencia bancaria 10%", "¿Tu tienda cobra por transferencia con 10 % off?", seg("transferencia", "Sí", "No"))}</div></div>
-  <div class="card"><h3>Tus costos</h3><div class="form">
-    ${f("Costo producto", "Lo que te cobra el fabricante por lo que lleva la venta.", inp("costoProducto", "$"))}
-    ${f("IVA compra producto", "¿Te da factura? Réplicas y sin factura: No.", seg("ivaProducto", "Sí", "No"), ars(r.iva.productoSiTuviera))}
-    ${f("Insumos / fulfillment", "Caja, etiqueta y armado de cada pedido.", inp("insumos", "$"))}
-    ${f("IVA empaquetaje", "En la planilla de Lauty va vacío (No).", seg("ivaInsumos", "Sí", "No"), ars(r.iva.empaquetajeSiTuviera))}
-    ${f("Envío", "Lo que pagás de envío por pedido.", inp("envio", "$"))}
-    ${f("IVA envío 21%", "Sale solo: los envíos siempre facturan.", `<input class="in ro" readonly value="${ars(r.iva.envio)}">`)}
-    ${f("CPA objetivo", "Lo que esperás pagarle a Meta por venta.", inp("cpaUsd", "US$", "0.1"))}
-    ${f("CPA objetivo en pesos", "CPA objetivo × T.C. USD.", `<input class="in ro" readonly value="${ars(r.cpaArs)}">`)}
-    ${f("Comisiones Mercado Pago / TN-Shopify", "Mercado Pago + la plataforma, en 3 cuotas.", inp("comision", "%", "0.1"))}
-    ${f("IIBB", "Ingresos brutos, sobre el precio.", inp("iibb", "%", "0.1"))}
-    ${f("Total costos", "Producto + envío + CPA + comisiones + insumos + IIBB.", `<input class="in ro" readonly value="${ars(r.totalCostos)}">`)}
-    ${f("% facturado", "Solo RI/SA: la parte del IVA de venta que cuenta.", inp("facturado", "%", "1"))}
-    ${f("Precio producto", "Lo que paga el cliente. Es la que más vas a tocar.", inp("precio", "$", "100"))}
-  </div></div>
-  <div class="card"><h3>CPA por cliente potencial</h3><p class="note">Si cada cliente potencial te sale tanto y compra 1 de cada 10, cuánto te sale cada venta. El CPA sale en la misma moneda que pongas.</p><div class="form" style="margin-top:8px">
-    ${f("CPA cliente potencial", "", `<input class="in" type="text" inputmode="decimal" data-calc="cpaCliente" value="${esc(String(v.cpaCliente ?? 0.5).replace(".", ","))}">`)}${f("Cantidad clientes", "", `<input class="in" type="text" inputmode="decimal" data-calc="cantClientes" value="${esc(v.cantClientes ?? 2500)}">`)}
-  </div><table class="tbl" style="margin-top:8px" data-out="pot"><tr><td>Inversión</td><td class="r">${int(pot.inversion)}</td></tr><tr><td>10 % de conversión</td><td class="r">${int(pot.ventas)}</td></tr><tr><td><b>CPA</b></td><td class="r"><b>${x2(pot.cpa)}</b></td></tr></table></div>
+  const tone = (x) => (x < 0 ? "bad" : "ok");
+  let h = `<div class="content c2">
+  <header class="c2-head"><div class="c2-ico">⚡</div><div><h1>Calculadora de precios</h1><p>Impoluto · Shopify + Meta Ads</p></div></header>
+  <div class="c2-grid"><div class="c2-col">
+  ${card("Tipo de cambio y cobro",
+    row("Dólar (T.C. USD)", `<a href="#" data-act="dolarhoy">Usar el dólar de ARQ de hoy</a>`, inp("tc", "$"), "El dólar de hoy: pasa el CPA a pesos.") +
+    row("Transferencia con 10% off", "", seg("transferencia", "Sí", "No"), "¿Tu tienda cobra por transferencia con 10 % off?"))}
+  ${card("Costos del producto",
+    row("Costo del producto", "Lo que le pagás al proveedor", inp("costoProducto", "$"), "Lo que te cobra el fabricante por lo que lleva la venta.") +
+    row("¿Te da factura A?", out("ivaProd", "IVA " + ars(r.iva.productoSiTuviera)), seg("ivaProducto", "Sí", "No"), "Réplicas y sin factura: No.") +
+    row("Insumos / armado", "Caja, etiqueta y armado", inp("insumos", "$")) +
+    row("¿El armado te da factura?", out("ivaIns", "IVA " + ars(r.iva.empaquetajeSiTuviera)), seg("ivaInsumos", "Sí", "No")))}
+  ${card("Envío y publicidad",
+    row("Envío", out("ivaEnv", "IVA " + ars(r.iva.envio) + " (siempre factura)"), inp("envio", "$"), "Lo que pagás de envío por pedido.") +
+    row("CPA objetivo", out("cpaArs", ars(r.cpaArs) + " en pesos"), inp("cpaUsd", "US$"), "Lo que esperás pagarle a Meta por venta."))}
+  ${card("Comisiones e impuestos",
+    row("Comisiones (Mercado Pago + Shopify)", "En cuotas", inp("comision", "%"), "Mercado Pago + la plataforma, en 3 cuotas.") +
+    row("Ingresos brutos", "Sobre el precio", inp("iibb", "%")) +
+    row("% facturado", "Solo RI: la parte del IVA de venta que cuenta", inp("facturado", "%")) +
+    `<div class="c2-row tot"><div class="c2-l"><b>Total costos</b></div><div class="c2-r">${out("totCost", ars(r.totalCostos))}</div></div>`)}
+  ${card("CPA por cliente potencial",
+    `<p class="c2-note">Si cada cliente potencial te sale tanto y compra 1 de cada 10, cuánto te sale cada venta.</p>` +
+    row("CPA cliente potencial", "", inp("cpaCliente")) + row("Cantidad de clientes", "", inp("cantClientes")) +
+    `<div data-out="pot">${row("Inversión", "", `<span class="c2-val">${int(pot.inversion)}</span>`)}${row("Ventas (10 %)", "", `<span class="c2-val">${int(pot.ventas)}</span>`)}${row("<b>CPA</b>", "", `<span class="c2-val">${x2(pot.cpa)}</span>`)}</div>`)}
+  </div><div class="c2-col c2-side">
+  ${card("Precio", row("Precio final", "Lo que paga el comprador", inp("precio", "$", true)))}
+  <div data-out="res" style="display:grid;gap:14px">
+  <section class="c2-card c2-hero ${tone(R.utilidadProm)}"><div class="c2-hero-top"><h2>Ganancia neta por venta</h2><div class="c2-seg sm"><button data-calcreg="ri" aria-pressed="${!mono}">RI</button><button data-calcreg="mono" aria-pressed="${mono}">Monotributo</button></div></div>
+    <div class="c2-hero-n"><span class="n">${ars(R.utilidadProm)}</span><span class="pill">${pct(R.margenProm)}</span></div>
+    <p>${R.utilidadProm < 0 ? "Con este CPA perdés plata: subí el precio o bajá costos." : `Con un CPA de ${usd1(v.cpaUsd)}. Si pagás más de ${usd1(R.cpaBreakEvenUsd)} por venta, perdés.`}</p></section>
+  ${card("Meta Ads · equilibrio", `<div class="c2-kpis"><div><b>${usd1(R.cpaBreakEvenUsd)}</b><span>CPA break even: tenés que estar por debajo · ${ars(R.cpaBreakEvenArs)}</span></div><div><b>${x2(R.roasBreak)}</b><span>ROAS break even: tenés que estar por encima</span></div></div>`)}
+  ${card("Resultado", `<div class="c2-tbl"><div class="c2-th"><span></span><span class="${mono ? "" : "on"}">RI</span><span class="${mono ? "on" : ""}">Monotributo</span></div>
+    ${[["IVA compra", ars(r.ri.totalIvaCompra), "—"], ["IVA venta", ars(r.ri.totalIvaVenta), "—"], ["IVA a pagar", ars(r.ri.ivaAAbonar), "—"], ["<b>Ganancia neta</b>", ars(r.ri.utilidadProm), ars(r.mono.utilidadProm)], ["Margen", pct(r.ri.margenProm), pct(r.mono.margenProm)], ["CPA break even", usd1(r.ri.cpaBreakEvenUsd), usd1(r.mono.cpaBreakEvenUsd)], ["ROAS break even", x2(r.ri.roasBreak), x2(r.mono.roasBreak)]].map(([a, b, c]) => `<div class="c2-tr"><span>${a}</span><span>${b}</span><span>${c}</span></div>`).join("")}</div>
+    <details><summary>Ver la cuenta completa</summary><div class="c2-tbl">${[["Ganancia mín. (cuotas)", ars(r.ri.utilidadMin), ars(r.mono.utilidadMin)], ["Ganancia máx. (transferencia)", ars(r.ri.utilidadMax), ars(r.mono.utilidadMax)], ["Margen mín.", pct(r.ri.margenMin), pct(r.mono.margenMin)], ["Margen máx.", pct(r.ri.margenMax), pct(r.mono.margenMax)], ["IVA comisiones", ars(r.iva.comisiones), "—"], ["Precio sugerido", "—", ars(r.mono.precioSugerido)]].map(([a, b, c]) => `<div class="c2-tr"><span>${a}</span><span>${b}</span><span>${c}</span></div>`).join("")}</div></details>`)}
   </div>
-  <div class="res card" style="display:grid;gap:12px"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Lo que te queda</h3><div class="seg"><button data-calcreg="mono" aria-pressed="${mono}">Monotributo</button><button data-calcreg="ri" aria-pressed="${!mono}">RI / SA</button></div></div>
-    <div data-out="res" style="display:grid;gap:12px"><div class="be"><div><div class="k">CPA break even USD</div><div class="big">${usd1(R.cpaBreakEvenUsd)}</div><div class="k">${ars(R.cpaBreakEvenArs)}</div></div><div><div class="k">ROAS break</div><div class="big2">${x2(R.roasBreak)}</div><div class="k">Debajo de esto, perdés</div></div>
-    <p>Con un CPA de <b>${usd1(v.cpaUsd)}</b> te quedan <b>${ars(R.utilidadProm)}</b> por venta (${pct(R.margenProm)}). Si pagás más de <b>${usd1(R.cpaBreakEvenUsd)}</b> por venta, perdés.</p></div>
-    <table class="tbl"><thead><tr><th></th><th class="r" style="color:${mono ? "" : "var(--pink)"}">RI/SA</th><th class="r" style="color:${mono ? "var(--pink)" : ""}">Monotributo</th></tr></thead><tbody>
-    ${[["Total IVA compra", ars(r.ri.totalIvaCompra), "—"], ["Total IVA venta", ars(r.ri.totalIvaVenta), "—"], ["IVA a abonar", ars(r.ri.ivaAAbonar), "—"], ["Utilidad prom. (descontando IVA)", ars(r.ri.utilidadProm), ars(r.mono.utilidadProm)], ["Promedio (margen)", pct(r.ri.margenProm), pct(r.mono.margenProm)], ["CPA break even USD", usd1(r.ri.cpaBreakEvenUsd), usd1(r.mono.cpaBreakEvenUsd)], ["CPA break even ARS", ars(r.ri.cpaBreakEvenArs), ars(r.mono.cpaBreakEvenArs)], ["ROAS break", x2(r.ri.roasBreak), x2(r.mono.roasBreak)]].map(([a, b, c]) => `<tr><td>${a}</td><td class="r">${b}</td><td class="r">${c}</td></tr>`).join("")}
-    </tbody></table>
-    <details><summary class="muted small" style="cursor:pointer">Ver la cuenta completa (las filas ocultas de la planilla)</summary><table class="tbl" style="margin-top:6px">
-    ${[["Utilidad min (cuotas)", ars(r.ri.utilidadMin), ars(r.mono.utilidadMin)], ["Utilidad max (transfer)", ars(r.ri.utilidadMax), ars(r.mono.utilidadMax)], ["Margen min. (cuotas)", pct(r.ri.margenMin), pct(r.mono.margenMin)], ["Margen max. (transfer)", pct(r.ri.margenMax), pct(r.mono.margenMax)], ["IVA comisiones", ars(r.iva.comisiones), "—"], ["Precio sugerido", "—", ars(r.mono.precioSugerido)]].map(([a, b, c]) => `<tr><td>${a}</td><td class="r">${b}</td><td class="r">${c}</td></tr>`).join("")}</table></details></div>
-    <div class="actions"><input class="in" style="flex:1;min-width:160px" placeholder="Nombre del escenario" id="esc-name"><button class="ctl pri" data-act="esc-save">Guardar</button><button class="ctl" data-act="calc-copy">Copiar resultado</button></div>
-    ${S.escenarios.length ? `<div style="display:grid;gap:6px">${S.escenarios.map((e) => { const rr = calcular(e.v); const RR = mono ? rr.mono : rr.ri; return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;border:1px solid var(--n690);border-radius:8px;padding:8px 10px"><button class="ctl" style="border:0;background:none;text-align:left;padding:0" data-esc="${esc(e.id)}"><b>${esc(e.nombre)}</b><div class="muted small">${ars(e.v.precio)} · CPA break even ${usd1(RR.cpaBreakEvenUsd)} · ROAS ${x2(RR.roasBreak)}</div></button><button class="ctl" data-escdel="${esc(e.id)}">Borrar</button></div>`; }).join("")}</div>` : ""}
-  </div></div></div>`;
+  ${card("Escenarios", `<div class="c2-save"><input class="in" placeholder="Nombre del escenario" id="esc-name"><button class="ctl pri" data-act="esc-save">Guardar</button><button class="ctl" data-act="calc-copy">Copiar</button></div>
+    ${S.escenarios.map((e) => { const rr = calcular(e.v); const RR = mono ? rr.mono : rr.ri; return `<div class="c2-esc"><button data-esc="${esc(e.id)}"><b>${esc(e.nombre)}</b><small>${ars(e.v.precio)} · CPA break even ${usd1(RR.cpaBreakEvenUsd)} · ROAS ${x2(RR.roasBreak)}</small></button><button class="ctl" data-escdel="${esc(e.id)}">Borrar</button></div>`; }).join("")}`)}
+  </div></div>
+  <p class="c2-foot">Estimaciones con las cuentas de la planilla «Roas Breakeven». No contempla devoluciones. El impuesto a las Ganancias no se cuenta.</p></div>`;
   return h;
 }
 
