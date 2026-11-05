@@ -18,7 +18,7 @@ export const DEF_COSTOS = {
   envioSucursal: 0,       // respaldo si un pedido con envío gratis no tiene destino
   armadoPedido: 0,        // caja, etiqueta, depósito por pedido
   recargoAds: 0,          // % extra sobre el gasto en Meta (impuestos de la tarjeta, etc.)
-  ganPct: 15,             // provisión de Ganancias sobre la ganancia
+  ganPct: 0,              // (no se usa: el impuesto a las Ganancias no se cuenta en la app)
   fijos: [],              // [{nombre, monto}] por mes
   cpaObjetivo: { 1: 16, 2: 18, 3: 20 },
   metaPaga: "Caja",       // quién paga la tarjeta de Meta (para la caja)
@@ -63,9 +63,16 @@ export function unidadesPrincipales(o, prods) {
 // Tarifas cotizadas en Senyfull («Lo que ve el comprador») el 5/11/2026, hasta 0,5 kg (un pack de 3 pesa 0,45 kg).
 export const TARIFAS_SUCURSAL = { fecha: "2026-11-05", porCp: {"1417":7887,"1437":7887,"1439":7887,"1602":7887,"1607":7887,"1613":7887,"1614":7887,"1625":7887,"1627":7887,"1636":7887,"1641":7887,"1653":7887,"1661":7887,"1662":7887,"1665":7887,"1685":7887,"1704":7887,"1708":7887,"1721":7887,"1744":7887,"1748":7887,"1763":7887,"1765":7887,"1804":7887,"1824":7887,"1832":7887,"1870":7887,"1874":7887,"1875":7887,"1884":7887,"1914":7887,"2800":7887,"2804":7887,"6600":7887,"6700":7887,"7130":7887,"7223":7887,"2000":9679,"2011":9679,"2125":9679,"2126":9679,"2170":9679,"2204":9679,"2611":9679,"2700":9679,"2705":9679,"2820":9679,"2900":9679,"3100":9679,"3102":9679,"3106":9679,"3107":9679,"3150":9679,"3560":9679,"3580":9679,"5006":9679,"5010":9679,"5013":9679,"5107":9679,"5176":9679,"5186":9679,"5194":9679,"5800":9679,"6300":9679,"6303":9679,"6304":9679,"6409":9679,"6550":9679,"7000":9679,"7167":9679,"7513":9679,"7600":9679,"3300":10603,"3380":10603,"3400":10603,"3450":10603,"3460":10603,"3600":10603,"3700":10603,"4000":10603,"4200":10603,"5400":10603,"5501":10603,"5600":10603,"5700":10603,"6417":10603,"7105":10603,"8000":10603,"8003":10603,"8109":10603,"8153":10603,"8170":10603,"8201":10603,"8300":10603,"8304":10603,"8309":10603,"8316":10603,"8319":10603,"8324":10603,"8332":10603,"8353":10603,"8364":10603,"8370":10603,"8400":10603,"8430":10603,"9000":10603,"9011":10603,"9020":10603,"9100":10603,"4400":10631,"4412":10631,"4560":10631,"4600":10631} };
 // Si el código postal no está en la tabla (o no tiene sucursal cerca): la tarifa de su zona.
+// Para códigos postales sin cotizar: el del código postal cotizado más parecido (mismos 3 y después 2 primeros dígitos).
 export function tarifaSucursal(cp, prov, tabla = TARIFAS_SUCURSAL) {
   const c = String(cp || "").replace(/\D/g, "").slice(0, 4);
   if (c && tabla.porCp[c]) return tabla.porCp[c];
+  const caba = /ciudad aut|capital federal|caba/.test(String(prov || "").toLowerCase());
+  if (c && !caba) for (const largo of [3, 2]) {
+    const pre = c.slice(0, largo);
+    const vals = Object.entries(tabla.porCp).filter(([k]) => k.startsWith(pre)).map(([, v]) => v);
+    if (vals.length) return Math.max(...vals); // si hay dudas, la más cara (no inflar la ganancia)
+  }
   const p = String(prov || "").toLowerCase();
   if (/^1\d{3}$/.test(c) || /ciudad aut|capital federal|caba/.test(p)) return 7887; // AMBA
   if (/salta|jujuy|tierra del fuego/.test(p)) return 10631;
@@ -700,10 +707,10 @@ export function impuestosMes(ctx, mes /* AAAA-MM */) {
   const ri = cfg.regimen !== "mono";
   const debitoTotal = ri ? iva(r.ventas) : 0;
   const debito = debitoTotal * (1 - n(cfg.beneficioIva) / 100);
-  const creditoComisiones = ri ? iva(r.mp + r.shopify) : 0; // con Mercado Pago conectado, r.mp es la comisión real
+  const creditoComisiones = ri ? iva(r.mp) : 0; // comisión real de Mercado Pago (Shopify factura desde el exterior, sin IVA)
   const ivaPagar = ri ? debito - creditoComisiones - creditoGastos : 0;
   const gananciaAntes = r.ganancia;
-  const ganancias = Math.max(0, gananciaAntes) * (n(cfg.ganPct) / 100);
+  const ganancias = 0; // el impuesto a las Ganancias no se cuenta: depende de la declaración anual
   return {
     mes, from, to, ventas: r.ventas, regimen: cfg.regimen,
     debitoTotal, beneficio: debitoTotal - debito, debito,
@@ -718,8 +725,8 @@ export function impuestosMes(ctx, mes /* AAAA-MM */) {
 export function socios(ctx, from, to, nombres, CAJA = "Caja Impoluto") {
   const cfg = costosCfg(ctx.costos);
   const r = resumen(ctx, from, to);
-  const ganancias = Math.max(0, r.ganancia) * (n(cfg.ganPct) / 100);
-  const neta = r.ganancia - ganancias;
+  const ganancias = 0; // no se descuenta el impuesto a las Ganancias
+  const neta = r.ganancia;
   const pct = [n(cfg.repartoPct), 100 - n(cfg.repartoPct)];
   const inR = (d) => d >= from && d <= to;
   const filas = nombres.map((s, i) => {

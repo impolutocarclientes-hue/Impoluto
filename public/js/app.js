@@ -483,7 +483,7 @@ function viewImpuestos() {
   ] : [["Ventas del mes", t.ventas, ""], ["IVA", 0, "En monotributo no pagás IVA aparte: va en la cuota."]];
   h += block("iva", "IVA · " + monthName(S.impMes), `<div class="tbl-wrap"><table class="tbl"><tbody>${rows.map(([l, v, n], i) => `<tr${i === rows.length - 1 ? ' style="font-weight:600"' : ""}><td>${esc(l)}${n ? ` <span class="muted small">· ${esc(n)}</span>` : ""}</td><td class="r">${money(v)}</td></tr>`).join("")}</tbody></table></div>`);
   if (t.retencionesMp != null) h += `<p class="banner info">Mercado Pago te retuvo <b>${money(t.retencionesMp)}</b> de impuestos este mes. Son pagos a cuenta (IIBB, IVA o Ganancias): pasáselo a tu contador para que los descuente. El detalle está en Mercado Pago → Tu negocio → Impuestos.</p>`;
-  h += block("otros", "Ingresos brutos y Ganancias", `<div class="grid">${card({ label: "Ingresos brutos", tip: `${nn(cfg().iibbPct)} % sobre las ventas.`, value: money(t.iibb), src: "mix" })}${card({ label: "Ganancia del mes", tip: "La del dashboard: ya descuenta IVA e IIBB.", value: money(t.gananciaAntes), tone: t.gananciaAntes < 0 ? "bad" : "", src: "mix" })}${card({ label: "Provisión de Ganancias", tip: `${nn(cfg().ganPct)} % de la ganancia, para guardar. Es una estimación: el número final lo calcula tu contador en la declaración anual.`, value: money(t.ganancias), src: "mix" })}${card({ label: "Ganancia neta", tip: "Ganancia menos la provisión de Ganancias. Es la que se reparte entre los socios.", value: money(t.gananciaNeta), tone: t.gananciaNeta < 0 ? "bad" : "good", src: "mix" })}</div>
+  h += block("otros", "Ingresos brutos", `<div class="grid">${card({ label: "Ingresos brutos", tip: `${nn(cfg().iibbPct)} % sobre las ventas sin IVA.`, value: money(t.iibb), src: "mix" })}${card({ label: "Ganancia del mes", tip: "La del dashboard: ya descuenta IVA e IIBB. El impuesto a las Ganancias no se cuenta.", value: money(t.gananciaAntes), tone: t.gananciaAntes < 0 ? "bad" : "", src: "mix" })}</div>
     <p class="note" style="margin-top:8px">El dashboard estima el IVA pedido por pedido (con el envío y lo que te facturan según la configuración: ${money(t.estimadoEnDashboard)} este mes). Esta pantalla usa los gastos con Factura A que cargaste de verdad, así que es la que va para el contador.</p>`);
   return h + "</div>";
 }
@@ -494,7 +494,7 @@ function viewSocios() {
   const [f, t, label] = R[S.sociosR];
   const so = M.socios(ctx(), f, t, socios(), CAJA);
   let h = `<div class="bar2"><div class="chips">${Object.entries(R).map(([k, v]) => `<button class="chip" data-socr="${k}" aria-pressed="${S.sociosR === k}">${v[2]}</button>`).join("")}</div><button class="ctl pri" data-open="mov">+ Aporte o retiro</button></div><div class="content">`;
-  h += block("reparto", "Reparto de la ganancia neta · " + label, `<div class="grid">${card({ label: "Ganancia", value: money(so.ganancia), tone: so.ganancia < 0 ? "bad" : "", src: "mix" })}${card({ label: "Provisión de Ganancias", tip: `${nn(cfg().ganPct)} % de la ganancia: queda en la caja para pagar el impuesto.`, value: money(so.ganancias), src: "mix" })}${card({ label: "Ganancia neta a repartir", value: money(so.neta), tone: so.neta < 0 ? "bad" : "good", src: "mix" })}</div>
+  h += block("reparto", "Reparto de la ganancia · " + label, `<div class="grid">${card({ label: "Ganancia", value: money(so.ganancia), tone: so.ganancia < 0 ? "bad" : "", src: "mix" })}${card({ label: "Ganancia a repartir", tip: "Sin descontar el impuesto a las Ganancias.", value: money(so.neta), tone: so.neta < 0 ? "bad" : "good", src: "mix" })}</div>
     <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th>Socio</th><th class="r">%</th><th class="r">Le corresponde</th><th class="r">Gastos que pagó</th><th class="r">Aportes</th><th class="r">Retiros</th><th class="r">Saldo a su favor</th></tr></thead><tbody>
     ${so.filas.map((x) => `<tr><td>${esc(x.socio)}</td><td class="r">${int(x.pct)} %</td><td class="r">${money(x.corresponde)}</td><td class="r">${money(x.pusoGastos)}</td><td class="r">${money(x.aportes)}</td><td class="r">${x.retiros ? "−" + money(x.retiros) : money(0)}</td><td class="r"><b class="${x.saldo < 0 ? "down" : ""}">${money(x.saldo)}</b></td></tr>`).join("")}</tbody></table></div>
     <p class="note" style="margin-top:8px">Saldo a su favor = lo que puso (gastos de su bolsillo + aportes) + su parte de la ganancia neta − lo que ya retiró. Es lo que puede retirar sin desbalancear la sociedad. El reparto (${int(cfg().repartoPct)} / ${int(100 - nn(cfg().repartoPct))}) se cambia en Configuración → General.</p>`);
@@ -679,7 +679,7 @@ function viewConfig() {
       ${c.regimen !== "mono" ? `${row("Beneficio del IVA", "50 el primer año, 30 el segundo, 20 el tercero. Si ya no lo tenés, 0.", porc("beneficioIva", "1"))}
       ${row("¿Tu proveedor te da factura?", "Réplicas o sin factura: No.", sino("provFactura"))}
       ${row("¿El armado (fulfillment) te da factura?", "", sino("armadoFactura"))}` : ""}
-      ${row("Guardar para Ganancias", "Un % de lo que ganás, para el impuesto anual.", porc("ganPct", "0.5"))}</div>
+</div>
     <div class="card qcard"><h3>Cuánto querés pagarle a Meta por venta</h3>
       ${[1, 2, 3].map((k) => row(`Oferta ${k}${k === 3 ? " o más" : ""}`, k === 1 ? "Lleva 1 unidad. Lauty pide US$16." : k === 2 ? "Lleva 2. Lauty pide US$18." : "Lleva 3 o más. Lauty pide US$20.", `<div class="prefix w"><em>US$</em><input class="in" type="number" step="0.5" data-cpaobj="${k}" value="${esc(c.cpaObjetivo[k])}"></div>`)).join("")}</div>
     <div class="card qcard"><h3>Otros</h3>${row("Recargo sobre Meta", "Impuestos de la tarjeta sobre el gasto en anuncios. 0 si no tenés.", porc("recargoAds"))}</div>`;
@@ -786,7 +786,7 @@ function csvOrders() {
 }
 function csvImp() {
   const t = M.impuestosMes(ctx(), S.impMes);
-  const rows = [["Concepto", "Monto"], ["Ventas con IVA", t.ventas], ["IVA de venta total", t.debitoTotal], ["Beneficio de IVA", t.beneficio], ["IVA de venta a pagar", t.debito], ["IVA comisiones (MP + Shopify)", t.creditoComisiones], ["IVA gastos con Factura A", t.creditoGastos], ["IVA a pagar", t.ivaPagar], ["Ingresos brutos", t.iibb], ["Ganancia del mes", t.gananciaAntes], ["Provisión Ganancias", t.ganancias]].map((r) => [r[0], typeof r[1] === "number" ? Math.round(r[1]) : r[1]]);
+  const rows = [["Concepto", "Monto"], ["Ventas con IVA", t.ventas], ["IVA de venta total", t.debitoTotal], ["Beneficio de IVA", t.beneficio], ["IVA de venta a pagar", t.debito], ["IVA comisiones de Mercado Pago", t.creditoComisiones], ["IVA gastos con Factura A", t.creditoGastos], ["IVA a pagar", t.ivaPagar], ["Ingresos brutos", t.iibb], ["Ganancia del mes", t.gananciaAntes]].map((r) => [r[0], typeof r[1] === "number" ? Math.round(r[1]) : r[1]]);
   rows.push([], ["Gastos del mes con Factura A"], ["Fecha", "Concepto", "Proveedor", "Monto", "IVA"]);
   S.gastos.filter((g) => g.fecha.startsWith(S.impMes) && g.facturaA).forEach((g) => rows.push([g.fecha, g.concepto || catOf(g).name, g.proveedor || "", Math.round(g.monto), Math.round(g.monto - g.monto / 1.21)]));
   download(`impuestos_${S.impMes}.csv`, rows);
