@@ -98,6 +98,8 @@ export function costoPedido(o, cfgIn, prods) {
   const units = unidadesPrincipales(o, prods);
   // Costo por unidad: el del lote del que salió (FIFO) si está calculado; si no, el costo base del producto.
   const producto = sum(o.li, (l) => n(l.cq) * (l._cu != null ? l._cu : n(prodCfg(prods, l.pid).costo)));
+  // Costo de los productos cuyo proveedor te da Factura A (su IVA es crédito).
+  const productoConFactura = sum(o.li, (l) => (prodCfg(prods, l.pid).factura ? n(l.cq) * (l._cu != null ? l._cu : n(prodCfg(prods, l.pid).costo)) : 0));
   const fisico = o.li.some((l) => n(l.cq) > 0 && prodCfg(prods, l.pid).tipo !== "digital");
   // Envío: lo fijo por pedido + el envío gratis que pagás vos (a sucursal, según el destino; a domicilio, el monto cargado).
   const envio = fisico ? n(cfg.envioPedido) + envioQuePagas(o, cfg, prods) : 0;
@@ -115,7 +117,7 @@ export function costoPedido(o, cfgIn, prods) {
   let ivaDebito = 0, ivaCredito = 0, ivaPagar = 0;
   if (cfg.regimen !== "mono") {
     ivaDebito = iva(venta + envioCliente) * (1 - n(cfg.beneficioIva) / 100);
-    ivaCredito = iva(mp) + iva(envio) + iva(envioCliente) + (cfg.armadoFactura ? iva(armado) : 0) + (cfg.provFactura ? iva(producto) : 0);
+    ivaCredito = iva(mp) + iva(envio) + iva(envioCliente) + (cfg.armadoFactura ? iva(armado) : 0) + iva(cfg.provFactura ? producto : productoConFactura);
     ivaPagar = ivaDebito - ivaCredito;
   }
   const cobroImp = mp + shopify + iibb + ivaPagar;

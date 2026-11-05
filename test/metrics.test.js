@@ -272,3 +272,12 @@ test("envío que paga el cliente: IVA de venta (con beneficio) y crédito por la
   const difMp = (con.mp - sin.mp) / 1.21 * 0.21;
   assert.ok(Math.abs(con.ivaCredito - sin.ivaCredito - ivaEnvio - difMp) < 1e-6);
 });
+
+test("producto con Factura A del proveedor: su IVA es crédito", () => {
+  const p2 = { ...prods, PAD: { costo: 1210, tipo: "agregado", factura: true } };
+  const o = order(6, "2026-10-10", 1, 42990);
+  o.li.push({ pid: "PAD", vid: "V2", sku: "", ti: "Pad", vt: "", q: 1, cq: 1, tot: 0, orig: 0 });
+  const sin = M.costoPedido(o, costos, prods);
+  const con = M.costoPedido(o, costos, p2);
+  assert.ok(Math.abs(con.ivaCredito - sin.ivaCredito - 210) < 1e-6);
+});

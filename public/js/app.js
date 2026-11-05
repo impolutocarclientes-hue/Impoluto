@@ -688,9 +688,10 @@ function viewConfig() {
   if (S.cfgSub === "productos") {
     const ps = productosVistos();
     const st = M.stockDetalle(ctx(), today).filter((x) => x.conteo);
-    h += ps.length ? `<p class="note">Los productos salen solos de tus ventas de Shopify. Cargá cuánto te cuesta cada unidad (lo que le pagás al proveedor). Si cada compra sale distinto, cargala en Control de stock → «Entró mercadería» con su costo: cada venta usa el costo de la compra de la que salió. "Agregado" es un upsell, order bump o seguro de envío: no paga envío ni anuncio aparte.</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="r">Vendidas</th><th>Costo por unidad</th><th>Tipo</th><th>Palabra de la campaña ${tip("Si el nombre de la campaña de Meta tiene esta palabra, sus anuncios se le asignan a este producto.")}</th><th>Stock ${tip("Cuántas unidades tenías en esa fecha. Descontamos solas las que se venden después.")}</th><th>Desde</th><th class="r">Te alcanza</th></tr></thead><tbody>
+    h += ps.length ? `<p class="note">Los productos salen solos de tus ventas de Shopify. Cargá cuánto te cuesta cada unidad (lo que le pagás al proveedor). Si cada compra sale distinto, cargala en Control de stock → «Entró mercadería» con su costo: cada venta usa el costo de la compra de la que salió. "Agregado" es un upsell, order bump o seguro de envío: no paga envío ni anuncio aparte.</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="r">Vendidas</th><th>Costo por unidad</th><th>Factura A ${tip("Si el proveedor de este producto te da Factura A, descontás el IVA de su costo.")}</th><th>Tipo</th><th>Palabra de la campaña ${tip("Si el nombre de la campaña de Meta tiene esta palabra, sus anuncios se le asignan a este producto.")}</th><th>Stock ${tip("Cuántas unidades tenías en esa fecha. Descontamos solas las que se venden después.")}</th><th>Desde</th><th class="r">Te alcanza</th></tr></thead><tbody>
       ${ps.map((p) => { const pc = S.prods[p.pid] || {}; const s = st.find((x) => x.pid === p.pid); return `<tr><td style="white-space:normal;min-width:180px">${esc(p.titulo)}</td><td class="r">${int(p.unidades)}</td>
       <td><div class="prefix" style="width:130px"><em>$</em><input class="in" type="number" data-prod="${esc(p.pid)}" data-k="costo" value="${esc(pc.costo ?? "")}"></div></td>
+      <td><select class="in" style="width:90px" data-prod="${esc(p.pid)}" data-k="factura"><option value="" ${pc.factura ? "" : "selected"}>No</option><option value="1" ${pc.factura ? "selected" : ""}>Sí</option></select></td>
       <td><select class="in" style="width:130px" data-prod="${esc(p.pid)}" data-k="tipo">${[["principal", "Principal"], ["agregado", "Agregado"], ["digital", "Digital (sin envío)"]].map(([v, l]) => `<option value="${v}" ${(pc.tipo || "principal") === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>
       <td><input class="in" style="width:130px" data-prod="${esc(p.pid)}" data-k="clave" value="${esc(pc.clave ?? "")}" placeholder="ej: impoluto"></td>
       <td><input class="in" style="width:90px" type="number" data-prod="${esc(p.pid)}" data-k="stock" value="${esc(pc.stock ?? "")}"></td>
@@ -1065,7 +1066,7 @@ document.addEventListener("change", async (e) => {
   if (d.prod) {
     const prev = S.prods[d.prod] || {};
     const p = productosVistos().find((x) => x.pid === d.prod);
-    const val = d.k === "costo" || d.k === "stock" ? (t.value === "" ? null : Number(t.value)) : t.value;
+    const val = d.k === "costo" || d.k === "stock" ? (t.value === "" ? null : Number(t.value)) : d.k === "factura" ? t.value === "1" : t.value;
     const next = { ...prev, nombre: (p && p.titulo) || prev.nombre || "", [d.k]: val };
     if (d.k === "stock" && val != null && !next.stockFecha) next.stockFecha = today;
     S.prods = { ...S.prods, [d.prod]: next };
