@@ -1,4 +1,5 @@
 import { redis, ORDERS, ADS, ADMETA, MPPAY, isAuthed, deny, setupError, safeParse, getStatus } from "./_lib.js";
+import { DOLAR } from "./_dolar.js";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -36,5 +37,8 @@ export default async function handler(req, res) {
   const meta = {};
   for (const [k, v] of Object.entries(mRaw || {})) meta[k] = typeof v === "string" ? safeParse(v) : v;
   if (meta.sessions) meta.sessions = meta.sessions.filter((s) => s.d >= from && s.d <= to);
-  res.status(200).json({ orders, ads, meta, pays, status });
+  const dRaw = (await redis.hgetall(DOLAR)) || {};
+  const dolares = {};
+  for (const [d, v] of Object.entries(dRaw)) { const x = typeof v === "string" ? safeParse(v) : v; if (x && x.v) dolares[d] = x; }
+  res.status(200).json({ orders, ads, meta, pays, status, dolares });
 }

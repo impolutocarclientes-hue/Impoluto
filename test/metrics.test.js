@@ -201,3 +201,18 @@ test("Costo por lote (FIFO): cada venta usa el costo de la compra de la que sali
   assert.equal(r.actual, 25);
   assert.equal(r.valor, 15 * 5000 + 10 * 7000);
 });
+
+test("Envío gratis a sucursal y dólar del día", () => {
+  const li = (q) => ({ pid: "R", vid: "v", sku: "", ti: "Restaurador", vt: "", q, cq: q, tot: 30000 * q, orig: 30000 * q });
+  const o = (id, q, extra) => ({ id, n: id, c: "2026-11-02T15:00:00Z", p: "2026-11-02T15:00:00Z", x: null, t: false, f: "PAID", g: "mp", s: "web", tot: 30000 * q, cur: 30000 * q, disc: 0, ship: 0, ref: 0, dc: [], li: [li(q)], ...extra });
+  const cfg = { regimen: "mono", mpPctSin: 0, mpCuotas: false, shopifyPct: 0, iibbPct: 0, envioSucursal: 5000, armadoPedido: 0 };
+  assert.equal(M.costoPedido(o("a", 2, { sl: "Envío gratis a sucursal Andreani" }), cfg, {}).envio, 5000);
+  assert.equal(M.costoPedido(o("b", 1, { sl: "Andreani a domicilio", ship: 4500 }), cfg, {}).envio, 0); // lo pagó el cliente
+  assert.equal(M.costoPedido(o("c", 2, { sl: "Envío a domicilio gratis" }), cfg, {}).envio, 0);       // no es sucursal
+  assert.equal(M.costoPedido(o("d", 3, {}), cfg, {}).envio, 5000);  // pedido viejo sin método: pack y gratis
+  assert.equal(M.costoPedido(o("e", 1, {}), cfg, {}).envio, 0);
+  // Dólar por día: cada fila de Meta con su cotización
+  const ads = [{ d: "2026-11-01", ad: "A", can: "Impoluto", sp: 10, k: 1600 }, { d: "2026-11-02", ad: "A", can: "Impoluto", sp: 10 }];
+  const r = M.resumen({ orders: [], ads, meta: { currency: "USD" }, costos: { dolar: 1500 }, prods: {} }, "2026-11-01", "2026-11-02");
+  assert.equal(r.anuncios, 10 * 1600 + 10 * 1500);
+});

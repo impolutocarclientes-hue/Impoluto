@@ -22,6 +22,12 @@ function shortDate(d) { const [y, m, dd] = d.split("-").map(Number); return new 
 function longDate(d) { const [y, m, dd] = d.split("-").map(Number); return new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }); }
 function monthName(ym) { const [y, m] = ym.split("-").map(Number); const s = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "UTC" }); return s.charAt(0).toUpperCase() + s.slice(1); }
 initFacturas({ api, toast, render, esc, money: ars });
+// Último dólar de ARQ guardado (hoy o el más reciente).
+function dolarArqHoy() {
+  const D = (S.data && S.data.dolares) || {};
+  const d = Object.keys(D).filter((k) => D[k].src === "arq").sort().pop();
+  return d ? D[d].v : null;
+}
 function toast(msg) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), Math.max(2600, msg.length * 55)); }
 
 const ICON = {
@@ -108,6 +114,9 @@ async function loadData() {
     if (!T._error) S.data.orders.forEach((o) => o.li.forEach((l) => { if (l.pid && T[l.pid] && T[l.pid] !== l.ti) { l.tiOrig = l.ti; l.ti = T[l.pid]; } }));
     S.data.orders = M.vincularPagos(S.data.orders, S.data.pays);
     S.data.ads = M.soloCampanasTienda(S.data.ads);
+    // Cada día de anuncios con su dólar (ARQ si está guardado; si no, el cripto de ese día).
+    const DL = S.data.dolares || {};
+    S.data.ads.forEach((a) => { if (DL[a.d]) a.k = DL[a.d].v; });
     S.mpPcts = M.mpPctReales(S.data.pays, M.addDays(today, -60));
     S.loaded = true;
   } catch (e) { if (e.message !== "auth") S.loadErr = e.message; }
@@ -520,7 +529,7 @@ function viewCalc() {
   const pot = cpaPotencial(v.cpaCliente ?? 0.5, v.cantClientes ?? 2500);
   let h = `<div class="content" style="padding-top:14px"><div><h2 style="margin:0;font-size:22px">Calculadora de costos</h2><p class="note">La planilla de la clase «Roas Breakeven», con los mismos campos y las mismas cuentas. Cargás tus costos una vez, cambiás el precio y te dice cuánto te queda, tu CPA break even y tu ROAS break even.</p></div>
   <div class="calc"><div style="display:grid;gap:12px">
-  <div class="card"><div class="form">${f("T.C. USD", "El dólar de hoy: pasa el CPA a pesos.", inp("tc", "$"), `<a href="#" data-act="dolarhoy">Usar el dólar tarjeta de hoy</a>`)}${f("Transferencia bancaria 10%", "¿Tu tienda cobra por transferencia con 10 % off?", seg("transferencia", "Sí", "No"))}</div></div>
+  <div class="card"><div class="form">${f("T.C. USD", "El dólar de hoy: pasa el CPA a pesos.", inp("tc", "$"), `<a href="#" data-act="dolarhoy">Usar el dólar de ARQ de hoy</a>`)}${f("Transferencia bancaria 10%", "¿Tu tienda cobra por transferencia con 10 % off?", seg("transferencia", "Sí", "No"))}</div></div>
   <div class="card"><h3>Tus costos</h3><div class="form">
     ${f("Costo producto", "Lo que te cobra el fabricante por lo que lleva la venta.", inp("costoProducto", "$"))}
     ${f("IVA compra producto", "¿Te da factura? Réplicas y sin factura: No.", seg("ivaProducto", "Sí", "No"), ars(r.iva.productoSiTuviera))}
@@ -647,9 +656,10 @@ function viewConfig() {
       : `<div style="display:grid;gap:8px"><div class="seg" style="width:100%">${[["si", "Sí ≈17 %"], ["no", "No ≈7 %"], ["mio", "Pongo el mío"]].map(([v, l]) => `<button data-mpmodo="${v}" aria-pressed="${modo === v}">${l}</button>`).join("")}</div>
          ${modo === "mio" ? porc("mpPctSin") : ""}${modo === "si" ? `<div class="seg" style="width:100%">${[[1, "En todas"], [2, "Desde la 2"], [3, "Desde la 3"]].map(([v, l]) => `<button data-costv="mpDesde" data-val="${v}" aria-pressed="${nn(c.mpDesde || 1) === v}">${l}</button>`).join("")}</div>` : ""}</div>`;
     h += `<div class="card qcard"><h3>Tu dólar</h3>
-      ${row("Dólar", `Para pasar a pesos el gasto de Meta y el CPA. <a href="#" data-act="dolarhoy-cfg">Usar el dólar tarjeta de hoy</a>`, `<div class="prefix"><em>$</em><input class="in" type="number" data-cost="dolar" value="${esc(S.costos.dolar ?? c.dolar)}"></div>`)}</div>
+      ${row("Dólar de ARQ", dolarArqHoy() ? `El gasto de Meta de cada día se pasa a pesos con el dólar de ARQ de ese día (se guarda solo). Hoy: <b>${ars(dolarArqHoy())}</b>. Los días anteriores a que se empezara a guardar usan el dólar cripto de ese día.` : "Todavía no se guardó el dólar de ARQ: se guarda solo en la próxima actualización.", `<div class="small muted">Respaldo si un día no hay dato:</div><div class="prefix"><em>$</em><input class="in" type="number" data-cost="dolar" value="${esc(S.costos.dolar ?? c.dolar)}"></div><a href="#" class="small" data-act="dolarhoy-cfg">Poner el de ARQ de hoy</a>`)}</div>
     <div class="card qcard"><h3>Lo que te cuesta cada pedido</h3>
-      ${row("Envío que pagás vos", "0 si lo paga el cliente.", pesos("envioPedido"))}
+      ${row("Envío gratis a sucursal", "Lo que te cobra Andreani por cada envío gratis a sucursal (packs de 2 y 3). Se descuenta solo de esos pedidos.", pesos("envioSucursal"))}
+      ${row("Otro envío fijo por pedido", "Si pagás algo en todos los pedidos. 0 si no.", pesos("envioPedido"))}
       ${row("Armado y caja", "Caja, etiqueta, depósito.", pesos("armadoPedido"))}
       <p class="note">El costo de cada producto va en la pestaña <a href="#" data-cfgsub="productos">Productos</a>.</p></div>
     <div class="card qcard"><h3>Lo que se queda cada cobro</h3>
@@ -976,11 +986,10 @@ document.addEventListener("click", async (e) => {
     else if (act === "esc-save") { const nombre = ($("#esc-name").value || "").trim() || "Escenario " + (S.escenarios.length + 1); await db.collection("escenarios").doc().set({ nombre: nombre.slice(0, 80), v: calcState(), createdAt: new Date().toISOString() }); toast("Escenario guardado"); }
     else if (act === "calc-copy") { const v = calcState(), r = calcular(v), R = S.calcReg === "mono" ? r.mono : r.ri; await navigator.clipboard.writeText(`Precio ${ars(v.precio)} · CPA break even ${usd1(R.cpaBreakEvenUsd)} (${ars(R.cpaBreakEvenArs)}) · ROAS break ${x2(R.roasBreak)} · Utilidad ${ars(R.utilidadProm)} (${pct(R.margenProm)})`); toast("Copiado"); }
     else if (act === "dolarhoy" || act === "dolarhoy-cfg") {
-      const r = await fetch("https://dolarapi.com/v1/dolares/tarjeta").then((x) => x.json());
-      const v = Math.round(Number(r.venta));
-      if (!v) throw new Error("no llegó el dólar");
+      const v = Math.round(dolarArqHoy() || 0) || Math.round(Number((await fetch("https://criptoya.com/api/dolarapp/usdc/ars/1").then((x) => x.json())).totalAsk));
+      if (!v) throw new Error("no llegó el dólar de ARQ");
       if (act === "dolarhoy") setCalc("tc", v); else { saveCostos({ dolar: v }); render(); }
-      toast("Dólar tarjeta: " + ars(v));
+      toast("Dólar ARQ: " + ars(v));
     }
     else if (act === "sh-save") {
       t.disabled = true; t.textContent = "Conectando…";

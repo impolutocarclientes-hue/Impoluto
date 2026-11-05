@@ -1,5 +1,6 @@
 import { redis, ORDERS, ADS, ADMETA, MPPAY, isAuthed, isCron, deny, setupError, readJson, getSecrets, getStatus, setStatus } from "./_lib.js";
 import { fetchOrders, fetchSessions, fetchProductTitles } from "./_shopify.js";
+import { actualizarDolares } from "./_dolar.js";
 import { insightsByDay, frequency7d, campaigns, accountInfo } from "./_meta.js";
 import { fetchPayments, refreshToken, tokenSoloLectura, tieneEscritura } from "./_mp.js";
 import { SECRETS } from "./_lib.js";
@@ -17,9 +18,11 @@ async function hsetChunks(key, entries) {
   }
 }
 
+// Versión de los datos que se guardan de cada pedido: si cambia, se vuelven a traer los últimos 60 días.
+const VERSION_PEDIDO = 2; // 2: método de envío
 export async function syncShopify(cfg, prev, opts = {}) {
   // Primera vez: los últimos 60 días (lo que deja read_orders). Después: lo que cambió desde el último sync, con 2 h de margen.
-  const since = opts.full || !prev || !prev.lastUpdated
+  const since = opts.full || !prev || !prev.lastUpdated || (prev.v || 1) < VERSION_PEDIDO
     ? iso(daysAgo(Number(opts.days) || 60)) + "T00:00:00Z"
     : new Date(new Date(prev.lastUpdated).getTime() - 2 * 3600 * 1000).toISOString();
   const { orders, complete } = await fetchOrders(cfg, since);
@@ -32,7 +35,7 @@ export async function syncShopify(cfg, prev, opts = {}) {
     const titles = await fetchProductTitles(cfg);
     await redis.hset(ADMETA, { prodTitles: JSON.stringify(titles || {}) });
   }
-  return { count: orders.length, complete, lastUpdated, sessions: !!sessions };
+  return { count: orders.length, complete, lastUpdated, sessions: !!sessions, v: complete ? VERSION_PEDIDO : (prev && prev.v) || 1 };
 }
 
 export async function syncMeta(cfg, prev, opts = {}) {
@@ -126,8 +129,10 @@ export default async function handler(req, res) {
       await setStatus("mp", { ...(st.mp || {}), ok: false, error: e.message });
     }
   }
+  // Dólar de ARQ de hoy y, para los días que falten, el dólar cripto del día (para pasar el gasto de Meta a pesos).
+  try { out.dolar = await actualizarDolares(new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)); } catch (e) { out.dolar = { error: e.message }; }
   const next = { ...prev };
-  if (out.shopify && !out.shopify.error) next.shopify = { lastUpdated: out.shopify.lastUpdated, at: new Date().toISOString() };
+  if (out.shopify && !out.shopify.error) next.shopify = { lastUpdated: out.shopify.lastUpdated, v: out.shopify.v, at: new Date().toISOString() };
   if (out.mp && !out.mp.error) next.mp = { lastUpdated: out.mp.lastUpdated, at: new Date().toISOString() };
   if (out.meta && !out.meta.error) next.meta = { lastDay: out.meta.lastDay, at: new Date().toISOString() };
   await setStatus("sync", next);

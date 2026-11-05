@@ -14,7 +14,8 @@ export const DEF_COSTOS = {
   beneficioIva: 50,       // % de beneficio de IVA (pagás el resto del IVA de venta)
   provFactura: false,     // ¿el proveedor te da factura?
   armadoFactura: false,   // ¿el fulfillment te da factura?
-  envioPedido: 0,         // envío que pagás vos por pedido
+  envioPedido: 0,         // envío que pagás vos por pedido (todos)
+  envioSucursal: 0,       // envío gratis a sucursal que pagás vos (packs de 2 y 3)
   armadoPedido: 0,        // caja, etiqueta, depósito por pedido
   recargoAds: 0,          // % extra sobre el gasto en Meta (impuestos de la tarjeta, etc.)
   ganPct: 15,             // provisión de Ganancias sobre la ganancia
@@ -56,6 +57,13 @@ export function unidadesPrincipales(o, prods) {
 }
 
 // Cuánto se lleva cada cosa de un pedido pagado (la cuenta de ESA, pedido por pedido).
+// ¿Este pedido tuvo envío gratis a sucursal que pagás vos? Si sabemos el método de envío: «sucursal» y gratis.
+// En pedidos viejos sin ese dato: gratis y de 2 o más unidades (los packs con envío gratis a sucursal).
+export function pagasEnvioSucursal(o, prods) {
+  if (n(o.ship) > 0) return false;
+  if (o.sl) return /sucursal/i.test(o.sl);
+  return unidadesPrincipales(o, prods) >= 2;
+}
 export function costoPedido(o, cfgIn, prods) {
   const cfg = costosCfg(cfgIn);
   const venta = ingreso(o);
@@ -64,7 +72,8 @@ export function costoPedido(o, cfgIn, prods) {
   // Costo por unidad: el del lote del que salió (FIFO) si está calculado; si no, el costo base del producto.
   const producto = sum(o.li, (l) => n(l.cq) * (l._cu != null ? l._cu : n(prodCfg(prods, l.pid).costo)));
   const fisico = o.li.some((l) => n(l.cq) > 0 && prodCfg(prods, l.pid).tipo !== "digital");
-  const envio = fisico ? n(cfg.envioPedido) : 0;
+  // Envío: lo fijo por pedido + el envío gratis a sucursal que pagás vos (packs de 2 y 3).
+  const envio = fisico ? n(cfg.envioPedido) + (pagasEnvioSucursal(o, prods) ? n(cfg.envioSucursal) : 0) : 0;
   const armado = fisico ? n(cfg.armadoPedido) : 0;
   const mpPct = transfer ? 0 : cfg.mpCuotas && units >= n(cfg.mpDesde || 1) ? n(cfg.mpPctCuotas) : n(cfg.mpPctSin);
   // Si el pedido está vinculado a su cobro de Mercado Pago, usamos la comisión real de ese cobro.
@@ -86,6 +95,8 @@ export function costoPedido(o, cfgIn, prods) {
 // La cuenta ECOM tiene campañas de otras marcas (Valmora): solo cuentan las que dicen "Impoluto" en el nombre.
 export const CAMPANA_TIENDA = /impoluto/i;
 export const soloCampanasTienda = (ads) => (ads || []).filter((a) => CAMPANA_TIENDA.test(a.can || ""));
+// Pesos por dólar de una fila de anuncios: el dólar de ARQ de ese día si está, si no el de la configuración.
+export const kDe = (a, conv) => (conv.usd ? n(a.k) || conv.k : 1);
 export function adsArs(rows, meta, cfgIn) {
   const cfg = costosCfg(cfgIn);
   const usd = String((meta && meta.currency) || "USD").toUpperCase() === "USD";
@@ -172,7 +183,8 @@ export function resumen({ orders, ads, meta, costos, prods, pays }, from, to) {
   const conv = adsArs(ads, meta, cfg);
   const adsR = ads.filter((a) => a.d >= from && a.d <= to);
   const spendCuenta = sum(adsR, (a) => n(a.sp));
-  const spendBase = spendCuenta * conv.k;
+  const spendBase = sum(adsR, (a) => n(a.sp) * kDe(a, conv));
+  const kProm = spendCuenta ? spendBase / spendCuenta : conv.k; // dólar promedio del período
   const anuncios = spendBase * conv.recargo;
   const fijos = fijosEnRango(cfg, from, to);
   // Con Mercado Pago conectado usamos la comisión real de los cobros en vez del % estimado.
@@ -212,9 +224,10 @@ export function resumen({ orders, ads, meta, costos, prods, pays }, from, to) {
     trueRoas: anuncios ? netas / anuncios : 0,
     beRoas: dineroPor > 0 ? ventas / dineroPor : 0,
     cpa: nPag ? anuncios / nPag : 0,
-    cpaUsd: nPag ? anuncios / nPag / n(cfg.dolar) : 0,
+    cpaUsd: nPag ? anuncios / nPag / (kProm || n(cfg.dolar)) : 0,
     cpaMax: nPag ? dineroPor / nPag : 0,
-    cpaMaxUsd: nPag ? dineroPor / nPag / n(cfg.dolar) : 0,
+    cpaMaxUsd: nPag ? dineroPor / nPag / (kProm || n(cfg.dolar)) : 0,
+    dolarProm: kProm,
     mer: ventas ? anuncios / ventas : 0,
     descuentos: sum(pagados, (o) => n(o.disc)),
     conDescuento: pagados.filter((o) => n(o.disc) > 0).length,
@@ -246,7 +259,7 @@ export function serieDiaria(ctx, from, to) {
     const c = costoPedido(o, cfg, ctx.prods);
     dias[d].ventas += c.venta; dias[d].margen += c.margen; dias[d].pedidos++;
   });
-  ctx.ads.forEach((a) => { if (dias[a.d]) dias[a.d].anuncios += n(a.sp) * conv.k * conv.recargo; });
+  ctx.ads.forEach((a) => { if (dias[a.d]) dias[a.d].anuncios += n(a.sp) * kDe(a, conv) * conv.recargo; });
   return Object.values(dias).map((x) => ({ ...x, ganancia: x.margen - x.anuncios - x.fijos }));
 }
 
@@ -277,7 +290,7 @@ export function porProducto(ctx, from, to) {
   const lista = Object.values(m);
   let sinAsignar = 0;
   ctx.ads.filter((a) => a.d >= from && a.d <= to).forEach((a) => {
-    const ars = n(a.sp) * conv.k * conv.recargo;
+    const ars = n(a.sp) * kDe(a, conv) * conv.recargo;
     const nombre = String(a.can || "").toLowerCase();
     const p = lista.find((x) => { const kw = String(prodCfg(ctx.prods, x.pid).clave || "").toLowerCase().trim(); return kw && nombre.includes(kw); });
     if (p) p.anuncios += ars; else sinAsignar += ars;
@@ -332,15 +345,15 @@ export function anunciosSemaforo(ctx, from, to, refFrom, refTo) {
   const m = {};
   ctx.ads.filter((a) => a.d >= from && a.d <= to).forEach((a) => {
     const x = (m[a.ad] = m[a.ad] || { ad: a.ad, nombre: a.an, conjunto: a.asn, campana: a.can, ca: a.ca, sp: 0, imp: 0, clk: 0, atc: 0, pu: 0, pv: 0 });
-    x.sp += n(a.sp); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv);
+    x.sp += n(a.sp); x.spArs = (x.spArs || 0) + n(a.sp) * kDe(a, conv); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv);
   });
   const toUsd = (cuenta) => (conv.usd ? cuenta : cuenta / n(cfg.dolar));
   const lista = Object.values(m).filter((x) => x.sp > 0).map((x) => {
-    const spArs = x.sp * conv.k * conv.recargo;
+    const spArs = x.spArs * conv.recargo;
     const ganancia = x.pv ? (x.pv * ratio - spArs) / x.pv : null;
     const gastoUsd = toUsd(x.sp);
     const cpaUsd = x.pu ? gastoUsd / x.pu : null;
-    const roas = x.sp ? x.pv / (x.sp * conv.k) : 0;
+    const roas = x.spArs ? x.pv / x.spArs : 0;
     const fq = freq.ad[x.ad] || 0;
     let grupo;
     if (!x.pu) grupo = "sinventas";
@@ -370,11 +383,11 @@ export function campanas(ctx, from, to) {
   const m = {};
   ctx.ads.filter((a) => a.d >= from && a.d <= to).forEach((a) => {
     const x = (m[a.ca] = m[a.ca] || { ca: a.ca, nombre: a.can, sp: 0, imp: 0, clk: 0, atc: 0, pu: 0, pv: 0 });
-    x.sp += n(a.sp); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv);
+    x.sp += n(a.sp); x.spArs = (x.spArs || 0) + n(a.sp) * kDe(a, conv); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv);
   });
   return Object.values(m).filter((x) => x.sp > 0).map((x) => {
     const usd = conv.usd ? x.sp : x.sp / n(cfg.dolar);
-    const roas = x.pv / (x.sp * conv.k);
+    const roas = x.spArs ? x.pv / x.spArs : 0;
     const st = (info[x.ca] && info[x.ca].st) || "";
     const pausada = st && st !== "ACTIVE";
     const fase = /test|testeo|prueba/i.test(x.nombre) ? "Testeo" : "Escala";
@@ -617,7 +630,7 @@ export function caja(ctx, hoy, semanas = 8, CAJA = "Caja Impoluto") {
     if (metaAuto && pagaCaja && g.catId === "meta") return; // Meta ya entra solo desde la conexión
     w.salio += n(g.monto); w.det.gastos += n(g.monto);
   });
-  if (metaAuto && pagaCaja) ctx.ads.forEach((a) => { const w = wk(a.d); if (!w || a.d > hoy) return; const v = n(a.sp) * conv.k * conv.recargo; w.salio += v; w.det.anuncios += v; });
+  if (metaAuto && pagaCaja) ctx.ads.forEach((a) => { const w = wk(a.d); if (!w || a.d > hoy) return; const v = n(a.sp) * kDe(a, conv) * conv.recargo; w.salio += v; w.det.anuncios += v; });
   (ctx.movs || []).forEach((m) => {
     const w = wk(m.fecha); if (!w || m.fecha > hoy) return;
     if (m.tipo === "retiro") { w.salio += n(m.monto); w.det.retiros += n(m.monto); } else { w.entro += n(m.monto); w.det.aportes += n(m.monto); }
@@ -641,7 +654,7 @@ export function saldoCaja(ctx, hoy, saldoInicial = 0, CAJA = "Caja Impoluto") {
   ctx.orders.forEach((o) => { if (estado(o) === "pagado" && dayOf(o.p || o.c) <= hoy) { const c = costoPedido(o, cfg, ctx.prods); s += conMp && !c.transfer ? -c.shopify : c.venta - c.mp - c.shopify; } });
   if (conMp) ctx.pays.forEach((p) => { if (p.st === "approved" && esCobroVenta(p) && dayOf(p.rel || p.a || p.c) <= hoy) s += n(p.neto); });
   (ctx.gastos || []).forEach((g) => { if (g.fecha <= hoy && g.quien === CAJA && !(metaAuto && pagaCaja && g.catId === "meta")) s -= n(g.monto); });
-  if (metaAuto && pagaCaja) ctx.ads.forEach((a) => { if (a.d <= hoy) s -= n(a.sp) * conv.k * conv.recargo; });
+  if (metaAuto && pagaCaja) ctx.ads.forEach((a) => { if (a.d <= hoy) s -= n(a.sp) * kDe(a, conv) * conv.recargo; });
   (ctx.movs || []).forEach((m) => { if (m.fecha <= hoy) s += m.tipo === "retiro" ? -n(m.monto) : n(m.monto); });
   return s;
 }

@@ -70,6 +70,7 @@ const ORDER_FIELDS = `
       totalDiscountsSet{shopMoney{amount}} totalShippingPriceSet{shopMoney{amount}}
       totalRefundedSet{shopMoney{amount}}
       discountCodes
+      shippingLine{ title code originalPriceSet{shopMoney{amount}} }
       lineItems(first:50){ nodes{
         quantity currentQuantity sku name title variantTitle
         product{ id } variant{ id }
@@ -109,6 +110,8 @@ export function compactOrder(o) {
     ship: amt(o.totalShippingPriceSet),
     ref: amt(o.totalRefundedSet),
     dc: (o.discountCodes || []).slice(0, 5),
+    // Método de envío que eligió el cliente (para saber si fue envío gratis a sucursal).
+    sl: o.shippingLine ? String(o.shippingLine.title || o.shippingLine.code || "").slice(0, 120) : "",
     li: (o.lineItems && o.lineItems.nodes || []).map((l) => ({
       pid: gid(l.product && l.product.id) || null,
       vid: gid(l.variant && l.variant.id) || null,
