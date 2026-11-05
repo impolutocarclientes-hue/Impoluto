@@ -61,7 +61,8 @@ export function costoPedido(o, cfgIn, prods) {
   const venta = ingreso(o);
   const transfer = esTransferencia(o);
   const units = unidadesPrincipales(o, prods);
-  const producto = sum(o.li, (l) => n(l.cq) * n(prodCfg(prods, l.pid).costo));
+  // Costo por unidad: el del lote del que salió (FIFO) si está calculado; si no, el costo base del producto.
+  const producto = sum(o.li, (l) => n(l.cq) * (l._cu != null ? l._cu : n(prodCfg(prods, l.pid).costo)));
   const fisico = o.li.some((l) => n(l.cq) > 0 && prodCfg(prods, l.pid).tipo !== "digital");
   const envio = fisico ? n(cfg.envioPedido) : 0;
   const armado = fisico ? n(cfg.armadoPedido) : 0;
@@ -515,7 +516,11 @@ export function stockDetalle(ctx, hoy, rango) {
     (ctx.orders || []).forEach((o) => { if (!o.t && estado(o) === "pendiente" && dayOf(o.c) >= desde) o.li.forEach((l) => { if (l.pid === pid) reservadas += n(l.cq); }); });
     const actual = n(p.stock) + entradas + ajustes - salidas - vendidas;
     Object.assign(out, { conteo: { cant: n(p.stock), fecha: desde }, entradas, ajustes, salidas, vendidas, reservadas, actual });
-    out.valor = out.costo != null ? Math.max(0, actual) * out.costo : null;
+    const fifo = ctx.fifo && ctx.fifo[pid];
+    if (fifo) {
+      out.lotes = fifo.lotes; out.costoProximo = fifo.proximo; out.costoUltimo = fifo.ultimo;
+      out.valor = fifo.lotes.every((lt) => lt.costo != null) ? fifo.lotes.reduce((t, lt) => t + lt.quedan * lt.costo, 0) : null;
+    } else out.valor = out.costo != null ? Math.max(0, actual) * out.costo : null;
     if (ritmo > 0) {
       out.dias = Math.max(0, actual) / ritmo;
       out.quiebre = addDays(hoy, Math.floor(out.dias));
@@ -525,6 +530,57 @@ export function stockDetalle(ctx, hoy, rango) {
     out.estadoStock = actual <= 0 ? "sin-stock" : out.dias != null && out.dias <= out.alertaDias ? "critico" : out.pedir && out.pedir.ya ? "pedir" : "bien";
     return out;
   }).sort((a, b) => (a.sinStock - b.sinStock) || (b.r30 - a.r30));
+}
+
+// ---------- Costo por lotes (FIFO: lo primero que entra es lo primero que sale) ----------
+// Lotes: el conteo inicial (al costo base del producto) y cada «Entró mercadería» con su costo y proveedor.
+// Cada venta pagada (y cada salida o ajuste negativo) consume del lote más viejo. Marca en cada línea de pedido
+// l._cu = costo por unidad promedio de lo que consumió. Devuelve los lotes que quedan por producto.
+export function costeoFIFO(orders, prods, stockMovs) {
+  const out = {};
+  const porPid = {};
+  (stockMovs || []).forEach((m) => { (porPid[m.pid] = porPid[m.pid] || []).push(m); });
+  (orders || []).forEach((o) => o.li.forEach((l) => { delete l._cu; }));
+  Object.entries(prods || {}).forEach(([pid, p]) => {
+    if (p.stock == null || p.stock === "" || !p.stockFecha) return;
+    const base = p.costo == null || p.costo === "" ? null : n(p.costo);
+    // Eventos ordenados por fecha: entradas primero dentro del mismo día.
+    const ev = [];
+    ev.push({ t: p.stockFecha + "T00:00:00", k: 0, tipo: "lote", cant: n(p.stock), costo: base, proveedor: "Stock inicial", fecha: p.stockFecha });
+    (porPid[pid] || []).filter((m) => m.fecha >= p.stockFecha).forEach((m) => {
+      const cant = n(m.cant);
+      if (m.tipo === "ingreso" || (m.tipo === "ajuste" && cant > 0)) ev.push({ t: m.fecha + "T00:00:01", k: 0, tipo: "lote", cant, costo: m.costo == null || m.costo === "" ? null : n(m.costo), proveedor: m.proveedor || (m.tipo === "ajuste" ? "Ajuste por conteo" : ""), fecha: m.fecha });
+      else if (m.tipo === "salida" || (m.tipo === "ajuste" && cant < 0)) ev.push({ t: m.fecha + "T23:59:58", k: 1, tipo: "consumo", cant: Math.abs(cant) });
+    });
+    (orders || []).forEach((o) => {
+      if (o.t || estado(o) !== "pagado" || dayOf(o.c) < p.stockFecha) return;
+      o.li.forEach((l) => { if (l.pid === pid && n(l.cq) > 0) ev.push({ t: o.c, k: 1, tipo: "venta", cant: n(l.cq), linea: l }); });
+    });
+    ev.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : a.k - b.k));
+    const lotes = [];
+    let ultimo = base;
+    for (const e of ev) {
+      if (e.tipo === "lote") {
+        const costo = e.costo != null ? e.costo : ultimo; // ajuste o compra sin costo: el último conocido
+        lotes.push({ fecha: e.fecha, proveedor: e.proveedor, costo, inicial: e.cant, quedan: e.cant });
+        if (e.costo != null) ultimo = e.costo;
+        continue;
+      }
+      let falta = e.cant, plata = 0, conCosto = 0;
+      for (const lt of lotes) {
+        if (!falta) break;
+        if (lt.quedan <= 0) continue;
+        const usa = Math.min(lt.quedan, falta);
+        lt.quedan -= usa; falta -= usa;
+        if (lt.costo != null) { plata += usa * lt.costo; conCosto += usa; }
+      }
+      // Si se vendió más de lo que había cargado, lo que falta va al último costo conocido.
+      if (falta > 0 && ultimo != null) { plata += falta * ultimo; conCosto += falta; }
+      if (e.linea && conCosto === e.cant) e.linea._cu = plata / e.cant;
+    }
+    out[pid] = { lotes: lotes.filter((lt) => lt.quedan > 0), todos: lotes, proximo: (lotes.find((lt) => lt.quedan > 0) || {}).costo ?? ultimo, ultimo };
+  });
+  return out;
 }
 
 // ---------- Caja (semana por semana) ----------

@@ -70,7 +70,7 @@ const socios = () => (Array.isArray(S.app.socios) && S.app.socios.length >= 2 ? 
 const cats = () => (Array.isArray(S.app.cats) && S.app.cats.length ? S.app.cats : DEF_CATS);
 const catOf = (g) => cats().find((c) => c.id === g.catId) || cats().find((c) => c.name === g.cat) || { id: "otros", name: g.cat || "Otros", color: "#8C7F72" };
 const cfg = () => M.costosCfg(S.costos);
-const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: S.costos, prods: S.prods, gastos: S.gastos, movs: S.movs, stockMovs: S.stockMovs || [] });
+const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: S.costos, prods: S.prods, gastos: S.gastos, movs: S.movs, stockMovs: S.stockMovs || [], fifo: S.fifo });
 const money = (v) => (S.cur === "USD" ? usd(nn(v) / nn(cfg().dolar || 1)) : ars(v));
 
 function rangeOf(p) {
@@ -669,7 +669,7 @@ function viewConfig() {
   if (S.cfgSub === "productos") {
     const ps = productosVistos();
     const st = M.stockDetalle(ctx(), today).filter((x) => x.conteo);
-    h += ps.length ? `<p class="note">Los productos salen solos de tus ventas de Shopify. Cargá cuánto te cuesta cada unidad (lo que le pagás al proveedor). "Agregado" es un upsell, order bump o seguro de envío: no paga envío ni anuncio aparte.</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="r">Vendidas</th><th>Costo por unidad</th><th>Tipo</th><th>Palabra de la campaña ${tip("Si el nombre de la campaña de Meta tiene esta palabra, sus anuncios se le asignan a este producto.")}</th><th>Stock ${tip("Cuántas unidades tenías en esa fecha. Descontamos solas las que se venden después.")}</th><th>Desde</th><th class="r">Te alcanza</th></tr></thead><tbody>
+    h += ps.length ? `<p class="note">Los productos salen solos de tus ventas de Shopify. Cargá cuánto te cuesta cada unidad (lo que le pagás al proveedor). Si cada compra sale distinto, cargala en Control de stock → «Entró mercadería» con su costo: cada venta usa el costo de la compra de la que salió. "Agregado" es un upsell, order bump o seguro de envío: no paga envío ni anuncio aparte.</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="r">Vendidas</th><th>Costo por unidad</th><th>Tipo</th><th>Palabra de la campaña ${tip("Si el nombre de la campaña de Meta tiene esta palabra, sus anuncios se le asignan a este producto.")}</th><th>Stock ${tip("Cuántas unidades tenías en esa fecha. Descontamos solas las que se venden después.")}</th><th>Desde</th><th class="r">Te alcanza</th></tr></thead><tbody>
       ${ps.map((p) => { const pc = S.prods[p.pid] || {}; const s = st.find((x) => x.pid === p.pid); return `<tr><td style="white-space:normal;min-width:180px">${esc(p.titulo)}</td><td class="r">${int(p.unidades)}</td>
       <td><div class="prefix" style="width:130px"><em>$</em><input class="in" type="number" data-prod="${esc(p.pid)}" data-k="costo" value="${esc(pc.costo ?? "")}"></div></td>
       <td><select class="in" style="width:130px" data-prod="${esc(p.pid)}" data-k="tipo">${[["principal", "Principal"], ["agregado", "Agregado"], ["digital", "Digital (sin envío)"]].map(([v, l]) => `<option value="${v}" ${(pc.tipo || "principal") === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>
@@ -816,6 +816,7 @@ function viewStock() {
         <div><div class="small muted">Vendés por día</div><div style="font-size:26px;font-weight:600">${x.ritmo ? (Math.round(x.ritmo * 10) / 10).toString().replace(".", ",") : "0"}</div><div class="small muted">30 días: ${(Math.round(x.r30 * 10) / 10).toString().replace(".", ",")}/día</div></div></div>`;
       if (x.pedir) h += `<p style="margin:0">${x.pedir.ya ? `<b class="down">Pedí ya ${int(x.pedir.cant)} unidades.</b>` : `Próximo pedido: <b>el ${fechaCorta(x.pedir.cuando)}</b>, unas <b>${int(x.pedir.cant)} unidades</b>.`} <span class="muted small">Cuenta: lo que vendés en ${x.entregaDias} días que tarda en llegar + ${x.coberturaDias} días más, menos lo que te queda.</span></p>`;
       h += `<div class="small muted">Desde el conteo del ${fechaCorta(x.conteo.fecha)} (${int(x.conteo.cant)} u.): ${x.entradas ? `+${int(x.entradas)} entraron · ` : ""}${x.salidas ? `−${int(x.salidas)} salidas · ` : ""}${x.ajustes ? `${x.ajustes > 0 ? "+" : ""}${int(x.ajustes)} por conteo · ` : ""}−${int(x.vendidas)} vendidas${x.valor != null ? ` · stock valuado en ${ars(x.valor)}` : ""}</div>`;
+      if (x.lotes && x.lotes.length) h += `<div class="small"><span class="muted">Lo que tenés, por compra (se vende primero lo más viejo):</span> ${x.lotes.map((lt) => `<b>${int(lt.quedan)} u.</b> a ${lt.costo != null ? ars(lt.costo) : "<span class='down'>sin costo</span>"}${lt.proveedor ? ` · ${esc(lt.proveedor)}` : ""} <span class="muted">(${fechaCorta(lt.fecha)})</span>`).join(" &nbsp;|&nbsp; ")}</div>`;
       h += `<div class="actions"><button class="ctl pri" data-stk="ingreso" data-pid="${esc(x.pid)}">+ Entró mercadería</button><button class="ctl" data-stk="conteo" data-pid="${esc(x.pid)}">Conté el stock</button><button class="ctl" data-stk="salida" data-pid="${esc(x.pid)}">Salida (regalo, rotura)</button></div>`;
     }
     h += `<div><div class="small muted" style="margin-bottom:4px">Unidades vendidas por día · últimos 30 días</div>${barras(x.serie)}</div>
@@ -837,7 +838,7 @@ function viewStock() {
   const nom = Object.fromEntries(lista.map((x) => [x.pid, x.nombre]));
   const TIPO = { ingreso: "Entró mercadería", ajuste: "Conteo", salida: "Salida" };
   h += block("movstock", "Movimientos de stock", mv.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Producto</th><th>Qué</th><th class="r">Unidades</th><th>Nota</th><th></th></tr></thead><tbody>
-    ${mv.map((m) => `<tr><td>${esc(fechaCorta(m.fecha))}</td><td>${esc(nom[m.pid] || m.pid)}</td><td>${esc(TIPO[m.tipo] || m.tipo)}</td><td class="r">${m.tipo === "salida" ? "−" : m.cant > 0 && m.tipo === "ajuste" ? "+" : ""}${int(m.cant)}</td><td class="muted" style="white-space:normal">${esc(m.nota || "")}</td><td class="r"><button class="ctl" data-stk="borrar" data-id="${esc(m.id)}">Borrar</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="card empty">Cuando entre mercadería o hagas un conteo, queda registrado acá.</div>`);
+    ${mv.map((m) => `<tr><td>${esc(fechaCorta(m.fecha))}</td><td>${esc(nom[m.pid] || m.pid)}</td><td>${esc(TIPO[m.tipo] || m.tipo)}</td><td class="r">${m.tipo === "salida" ? "−" : m.cant > 0 && m.tipo === "ajuste" ? "+" : ""}${int(m.cant)}</td><td class="muted" style="white-space:normal">${[m.costo != null ? ars(m.costo) + " c/u" : "", m.proveedor || "", m.nota || ""].filter(Boolean).map(esc).join(" · ")}</td><td class="r"><button class="ctl" data-stk="borrar" data-id="${esc(m.id)}">Borrar</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="card empty">Cuando entre mercadería o hagas un conteo, queda registrado acá.</div>`);
   if (sin.length) h += `<p class="note">No llevan stock: ${sin.map((x) => `${esc(x.nombre)} <a href="#" data-stk="lleva" data-pid="${esc(x.pid)}">(sí lleva)</a>`).join(" · ")}</p>`;
   return h + "</div>";
 }
@@ -864,7 +865,9 @@ function stockAccion(acc, pid, id) {
   openModal(`<h2>${titulos[acc]} · ${esc(x.nombre)}</h2><p class="note">${ayuda[acc]}</p><div class="form">
     <label class="f"><span>Fecha</span><input class="in" type="date" id="sm-fecha" value="${today}"></label>
     <label class="f"><span>${acc === "conteo" ? "Unidades que contaste" : "Unidades"}</span><input class="in" type="number" min="0" id="sm-cant"></label>
-    <label class="f" style="grid-column:1/-1"><span>Nota</span><input class="in" id="sm-nota" placeholder="${acc === "ingreso" ? "ej: pedido a proveedor, remito 123" : acc === "salida" ? "ej: 2 de regalo a influencer" : "opcional"}"></label></div>
+    ${acc === "ingreso" ? `<label class="f"><span>Costo por unidad</span><div class="prefix"><em>$</em><input class="in" type="number" min="0" step="0.01" id="sm-costo" value="${esc(x.costoUltimo ?? x.costo ?? "")}"></div><small>Lo que pagaste por cada unidad de esta compra.</small></label>
+    <label class="f"><span>Proveedor</span><input class="in" id="sm-prov" list="sm-provs" value="${esc(((S.stockMovs || []).filter((m) => m.pid === pid && m.proveedor).sort((a, b) => b.fecha.localeCompare(a.fecha))[0] || {}).proveedor || "")}"><datalist id="sm-provs">${[...new Set((S.stockMovs || []).map((m) => m.proveedor).filter(Boolean))].map((p) => `<option value="${esc(p)}">`).join("")}</datalist></label>` : ""}
+    <label class="f" style="grid-column:1/-1"><span>Nota</span><input class="in" id="sm-nota" placeholder="${acc === "ingreso" ? "ej: remito 123" : acc === "salida" ? "ej: 2 de regalo a influencer" : "opcional"}"></label></div>
     <p class="note" id="sm-err" style="color:var(--red)"></p>
     <div class="actions" style="justify-content:flex-end"><button class="ctl" data-act="close">Cancelar</button><button class="ctl pri" id="sm-ok">Guardar</button></div>`);
   document.getElementById("sm-ok").onclick = async () => {
@@ -885,6 +888,11 @@ function stockAccion(acc, pid, id) {
     } else {
       if (!(cant > 0)) return err("Poné cuántas unidades.");
       doc = { pid, fecha, tipo: acc, cant, nota };
+      if (acc === "ingreso") {
+        const cS = document.getElementById("sm-costo").value.trim(), costo = Number(cS);
+        if (cS === "" || !Number.isFinite(costo) || costo < 0) return err("Poné el costo por unidad de esta compra.");
+        doc.costo = costo; doc.proveedor = document.getElementById("sm-prov").value.trim();
+      }
     }
     await db.collection("stockmov").add({ ...doc, at: new Date().toISOString() });
     closeModal();
@@ -902,6 +910,8 @@ function render() {
   $("#topr").innerHTML = topRight();
   const V = { dashboard: viewDashboard, anuncios: viewAnuncios, caja: viewCaja, impuestos: viewImpuestos, socios: viewSocios, gastos: viewGastos, calculadora: viewCalc, config: viewConfig, facturas: viewFacturas, stock: viewStock };
   $("#title").textContent = (VIEWS.find((v) => v[0] === S.view) || VIEWS[0])[1];
+  // Costo de cada venta según el lote del que salió (proveedores con precios distintos).
+  if (S.loaded) { try { S.fifo = M.costeoFIFO(S.data.orders, S.prods, S.stockMovs); } catch (e) { console.error(e); S.fifo = null; } }
   // Lo que el usuario está escribiendo en un formulario no se borra cuando la pantalla se actualiza sola.
   const kept = {};
   document.querySelectorAll("#view input[id], #view textarea[id], #modal input[id]").forEach((i) => { if (i.type !== "checkbox" && i.type !== "file" && i.value) kept[i.id] = i.value; });

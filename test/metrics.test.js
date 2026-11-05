@@ -168,3 +168,36 @@ test("Stock: conteo, ventas, entradas, conteos, reservas, ritmo y cuándo pedir"
   assert.equal(r2.estadoStock, "critico");
   assert.equal(r2.pedir.ya, true);
 });
+
+test("Costo por lote (FIFO): cada venta usa el costo de la compra de la que salió", () => {
+  const li = (q) => ({ pid: "R", vid: "v", sku: "", ti: "Restaurador", vt: "", q, cq: q, tot: 40000 * q, orig: 40000 * q });
+  const ord = (id, c, q) => ({ id, n: "#" + id, c, p: c, x: null, t: false, f: "PAID", g: "mercado_pago", s: "web", tot: 40000 * q, cur: 40000 * q, disc: 0, ship: 0, ref: 0, dc: [], li: [li(q)] });
+  const orders = [
+    ord("a", "2026-10-30T15:00:00Z", 3),  // antes del conteo: costo base
+    ord("b", "2026-11-02T15:00:00Z", 8),  // 8 del stock inicial (10 a $6.000)
+    ord("c", "2026-11-03T15:00:00Z", 4),  // 2 del inicial + 2 de la compra a $5.000 → $5.500 promedio
+    ord("d", "2026-11-06T15:00:00Z", 2),  // de la compra a $5.000
+  ];
+  const prods = { R: { nombre: "Restaurador", costo: 6000, stock: 10, stockFecha: "2026-11-01" } };
+  const movs = [
+    { pid: "R", fecha: "2026-11-03", tipo: "ingreso", cant: 20, costo: 5000, proveedor: "Proveedor B" },
+    { pid: "R", fecha: "2026-11-05", tipo: "salida", cant: 1 },
+    { pid: "R", fecha: "2026-11-07", tipo: "ingreso", cant: 10, costo: 7000, proveedor: "Proveedor C" },
+  ];
+  const F = M.costeoFIFO(orders, prods, movs);
+  assert.equal(orders[0].li[0]._cu, undefined); // usa el costo base
+  assert.equal(orders[1].li[0]._cu, 6000);
+  assert.equal(orders[2].li[0]._cu, 5500);
+  assert.equal(orders[3].li[0]._cu, 5000);
+  // Quedan: 20 − 2 − 1 − 2 = 15 de la compra a $5.000 y 10 a $7.000
+  assert.deepEqual(F.R.lotes.map((l) => [l.quedan, l.costo, l.proveedor]), [[15, 5000, "Proveedor B"], [10, 7000, "Proveedor C"]]);
+  assert.equal(F.R.proximo, 5000);
+  // La ganancia de cada pedido usa ese costo
+  const costos = { regimen: "mono", mpPctSin: 0, mpCuotas: false, shopifyPct: 0, iibbPct: 0 };
+  assert.equal(M.costoPedido(orders[2], costos, prods).producto, 4 * 5500);
+  assert.equal(M.costoPedido(orders[0], costos, prods).producto, 3 * 6000);
+  // El stock valuado sale de los lotes
+  const r = M.stockDetalle({ orders, prods, stockMovs: movs, fifo: F }, "2026-11-08").find((x) => x.pid === "R");
+  assert.equal(r.actual, 25);
+  assert.equal(r.valor, 15 * 5000 + 10 * 7000);
+});
