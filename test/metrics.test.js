@@ -210,11 +210,11 @@ test("Envío gratis a sucursal y dólar del día", () => {
   assert.equal(M.costoPedido(o("a2", 2, { sl: "Andreani- Envío a sucursal · X", cp: "8300", prov: "Neuquén" }), cfg, {}).envio, 10603);
   assert.equal(M.costoPedido(o("a3", 3, { sl: "Andreani- Envío a sucursal · X", cp: "1832" }), cfg, {}).envio, 7887);
   assert.equal(M.costoPedido(o("a4", 2, { sl: "Andreani- Envío a sucursal · X", cp: "9999", prov: "Salta" }), cfg, {}).envio, 10631); // CP no cotizado: zona
-  assert.equal(M.costoPedido(o("b", 1, { sl: "Andreani a domicilio", ship: 4500 }), cfg, {}).envio, 4500); // lo pagó el cliente: se le pasa a Andreani
+  assert.equal(M.costoPedido(o("b", 1, { sl: "Andreani a domicilio", ship: 4500 }), cfg, {}).envio, 0); // lo pagó el cliente
   assert.equal(M.costoPedido(o("c", 2, { sl: "Envío a domicilio", cp: "1832" }), cfg, {}).envio, 7887); // gratis: lo pagás vos, a sucursal
-  assert.equal(M.costoPedido(o("c2", 1, { sl: "Envío a domicilio", ship: 5000, cp: "1832" }), cfg, {}).envio, 5000); // lo pagó el cliente: entra y sale igual
+  assert.equal(M.costoPedido(o("c2", 1, { sl: "Envío a domicilio", ship: 5000, cp: "1832" }), cfg, {}).envio, 0); // lo pagó el cliente: no se resta
   assert.equal(M.costoPedido(o("d", 3, {}), cfg, {}).envio, 5000);  // pedido viejo sin método: pack y gratis
-  assert.equal(M.costoPedido(o("e", 1, { ship: 4000 }), cfg, {}).envio, 4000);
+  assert.equal(M.costoPedido(o("e", 1, { ship: 4000 }), cfg, {}).envio, 0);
   // Dólar por día: cada fila de Meta con su cotización
   const ads = [{ d: "2026-11-01", ad: "A", can: "Impoluto", sp: 10, k: 1600 }, { d: "2026-11-02", ad: "A", can: "Impoluto", sp: 10 }];
   const r = M.resumen({ orders: [], ads, meta: { currency: "USD" }, costos: { dolar: 1500 }, prods: {} }, "2026-11-01", "2026-11-02");

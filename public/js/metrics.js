@@ -77,9 +77,9 @@ export function pagasEnvioSucursal(o) { return !(n(o.ship) > 0); }
 // Lo que pagás vos de envío en un pedido con envío gratis para el cliente.
 // Regla del negocio: el envío a domicilio lo paga siempre el cliente; cuando el envío es gratis, lo pagás vos
 // y sale como envío a sucursal (tarifa de Andreani según el código postal de destino).
-// Si el cliente pagó el envío, esa plata entra con el pedido pero es de Andreani: se descuenta igual (sale lo que entró).
+// Solo se resta el envío gratis (lo paga el negocio). El que paga el cliente no se resta.
 export function envioQuePagas(o, cfg, prods) {
-  if (n(o.ship) > 0) return n(o.ship);
+  if (n(o.ship) > 0) return 0;
   return tarifaSucursal(o.cp, o.prov) ?? n(cfg.envioSucursal);
 }
 export function costoPedido(o, cfgIn, prods) {
