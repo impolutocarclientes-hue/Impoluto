@@ -49,7 +49,9 @@ export function estado(o) {
   return "pendiente";
 }
 export const esTransferencia = (o) => /manual|bank|transfer|deposit|cash|efectivo|contra/i.test(o.g || "");
-export const ingreso = (o) => Math.max(0, n(o.tot) - n(o.ref));
+// Venta del pedido: el total cobrado menos lo devuelto y menos el envío que pagó el cliente
+// (esa plata entra pero se usa para pagarle a Andreani: no es venta tuya).
+export const ingreso = (o) => Math.max(0, n(o.tot) - n(o.ref) - n(o.ship));
 
 export function prodCfg(prods, pid) { return (prods && prods[pid]) || {}; }
 export function unidadesPrincipales(o, prods) {

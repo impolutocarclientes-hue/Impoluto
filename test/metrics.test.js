@@ -220,3 +220,15 @@ test("Envío gratis a sucursal y dólar del día", () => {
   const r = M.resumen({ orders: [], ads, meta: { currency: "USD" }, costos: { dolar: 1500 }, prods: {} }, "2026-11-01", "2026-11-02");
   assert.equal(r.anuncios, 10 * 1600 + 10 * 1500);
 });
+
+test("Ventas sin el envío que pagó el cliente; solo se resta el envío gratis", () => {
+  const li = { pid: "R", vid: "v", sku: "", ti: "Restaurador", vt: "", q: 3, cq: 3, tot: 67990, orig: 128970 };
+  const o = { id: "1165", n: "#1165", c: "2026-11-05T05:23:00Z", p: "2026-11-05T05:23:00Z", x: null, t: false, f: "PAID", g: "mp", s: "web", tot: 81440, cur: 81440, disc: 60967, ship: 13450, ref: 0, dc: [], li: [li], sl: "Andreani — Envío a domicilio", cp: "5539", prov: "Mendoza" };
+  const cfg = { regimen: "mono", mpPctSin: 0, mpCuotas: false, shopifyPct: 0, iibbPct: 0, armadoPedido: 0 };
+  const c = M.costoPedido(o, cfg, {});
+  assert.equal(c.venta, 67990);
+  assert.equal(c.envio, 0);
+  const g = M.costoPedido({ ...o, tot: 67990, cur: 67990, ship: 0, sl: "Andreani- Envío a sucursal", cp: "1824" }, cfg, {});
+  assert.equal(g.venta, 67990);
+  assert.equal(g.envio, 7887);
+});
