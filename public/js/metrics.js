@@ -255,7 +255,7 @@ export function resumen({ orders, ads, meta, costos, prods, pays }, from, to) {
     transferencias: filas.filter((f) => f.c.transfer).length,
     meta: {
       imp: sum(adsR, (a) => n(a.imp)), clk: sum(adsR, (a) => n(a.clk)), lpv: sum(adsR, (a) => n(a.lpv)),
-      atc: sum(adsR, (a) => n(a.atc)), ic: sum(adsR, (a) => n(a.ic)), pu: purch, pv: sum(adsR, (a) => n(a.pv)),
+      atc: sum(adsR, (a) => n(a.atc)), ic: sum(adsR, (a) => n(a.ic)), pu: purch, pv: sum(adsR, (a) => n(a.pv) * kDe(a, conv)), // Meta informa el valor de compra en la moneda de la cuenta (USD): se pasa a pesos
     },
     filas,
   };
@@ -365,15 +365,16 @@ export function anunciosSemaforo(ctx, from, to, refFrom, refTo) {
   const m = {};
   ctx.ads.filter((a) => a.d >= from && a.d <= to).forEach((a) => {
     const x = (m[a.ad] = m[a.ad] || { ad: a.ad, nombre: a.an, conjunto: a.asn, campana: a.can, ca: a.ca, sp: 0, imp: 0, clk: 0, atc: 0, pu: 0, pv: 0 });
-    x.sp += n(a.sp); x.spArs = (x.spArs || 0) + n(a.sp) * kDe(a, conv); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv);
+    x.sp += n(a.sp); x.spArs = (x.spArs || 0) + n(a.sp) * kDe(a, conv); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv); x.pvArs = (x.pvArs || 0) + n(a.pv) * kDe(a, conv);
   });
   const toUsd = (cuenta) => (conv.usd ? cuenta : cuenta / n(cfg.dolar));
   const lista = Object.values(m).filter((x) => x.sp > 0).map((x) => {
     const spArs = x.spArs * conv.recargo;
-    const ganancia = x.pv ? (x.pv * ratio - spArs) / x.pv : null;
+    // Mismo idioma: todo en pesos (Meta da el valor de compra en dólares de la cuenta).
+    const ganancia = x.pvArs ? (x.pvArs * ratio - spArs) / x.pvArs : null;
     const gastoUsd = toUsd(x.sp);
     const cpaUsd = x.pu ? gastoUsd / x.pu : null;
-    const roas = x.spArs ? x.pv / x.spArs : 0;
+    const roas = x.spArs ? x.pvArs / x.spArs : 0;
     const fq = freq.ad[x.ad] || 0;
     let grupo;
     if (!x.pu) grupo = "sinventas";
@@ -403,11 +404,11 @@ export function campanas(ctx, from, to) {
   const m = {};
   ctx.ads.filter((a) => a.d >= from && a.d <= to).forEach((a) => {
     const x = (m[a.ca] = m[a.ca] || { ca: a.ca, nombre: a.can, sp: 0, imp: 0, clk: 0, atc: 0, pu: 0, pv: 0 });
-    x.sp += n(a.sp); x.spArs = (x.spArs || 0) + n(a.sp) * kDe(a, conv); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv);
+    x.sp += n(a.sp); x.spArs = (x.spArs || 0) + n(a.sp) * kDe(a, conv); x.imp += n(a.imp); x.clk += n(a.clk); x.atc += n(a.atc); x.pu += n(a.pu); x.pv += n(a.pv); x.pvArs = (x.pvArs || 0) + n(a.pv) * kDe(a, conv);
   });
   return Object.values(m).filter((x) => x.sp > 0).map((x) => {
     const usd = conv.usd ? x.sp : x.sp / n(cfg.dolar);
-    const roas = x.spArs ? x.pv / x.spArs : 0;
+    const roas = x.spArs ? x.pvArs / x.spArs : 0;
     const st = (info[x.ca] && info[x.ca].st) || "";
     const pausada = st && st !== "ACTIVE";
     const fase = /test|testeo|prueba/i.test(x.nombre) ? "Testeo" : "Escala";

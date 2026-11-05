@@ -232,3 +232,17 @@ test("Ventas sin el envío que pagó el cliente; solo se resta el envío gratis"
   assert.equal(g.venta, 67990);
   assert.equal(g.envio, 7887);
 });
+
+test("Anuncios: Meta da el valor de compra en dólares; ROAS y ganancia en el mismo idioma", () => {
+  const ads = [{ d: "2026-11-04", ad: "A1", an: "AD 1", ca: "C1", can: "Impoluto chapa", sp: 100, imp: 1000, clk: 30, atc: 5, pu: 4, pv: 300, k: 1600 }];
+  const li = { pid: "R", vid: "v", sku: "", ti: "R", vt: "", q: 1, cq: 1, tot: 120000, orig: 120000 };
+  const orders = [1, 2, 3, 4].map((i) => ({ id: "o" + i, n: "#" + i, c: "2026-11-04T15:00:00Z", p: "2026-11-04T15:00:00Z", x: null, t: false, f: "PAID", g: "mp", s: "web", tot: 120000, cur: 120000, disc: 0, ship: 4000, ref: 0, dc: [], li: [li] }));
+  const ctx = { orders, ads, meta: { currency: "USD" }, costos: { regimen: "mono", mpPctSin: 0, mpCuotas: false, shopifyPct: 0, iibbPct: 0, armadoPedido: 0 }, prods: {} };
+  const camp = M.campanas(ctx, "2026-11-04", "2026-11-04")[0];
+  assert.equal(Math.round(camp.roas * 100) / 100, 3); // 300 / 100 dólares
+  const sem = M.anunciosSemaforo(ctx, "2026-11-04", "2026-11-04").lista[0];
+  assert.equal(Math.round(sem.roas * 100) / 100, 3);
+  assert.ok(sem.ganancia > 0.5); // vende 480.000 de pv en pesos contra 160.000 de gasto: gana
+  const r = M.resumen(ctx, "2026-11-04", "2026-11-04");
+  assert.equal(Math.round(r.meta.roasPixel * 100) / 100, 3);
+});
