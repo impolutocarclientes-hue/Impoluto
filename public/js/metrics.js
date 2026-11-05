@@ -15,8 +15,7 @@ export const DEF_COSTOS = {
   provFactura: false,     // ¿el proveedor te da factura?
   armadoFactura: false,   // ¿el fulfillment te da factura?
   envioPedido: 0,         // envío que pagás vos por pedido (todos)
-  envioSucursal: 0,       // respaldo si un pedido a sucursal no tiene destino
-  envioDomicilio: 0,      // envío gratis a domicilio que pagaste vos (packs, 24/10 al 1/11)
+  envioSucursal: 0,       // respaldo si un pedido con envío gratis no tiene destino
   armadoPedido: 0,        // caja, etiqueta, depósito por pedido
   recargoAds: 0,          // % extra sobre el gasto en Meta (impuestos de la tarjeta, etc.)
   ganPct: 15,             // provisión de Ganancias sobre la ganancia
@@ -73,19 +72,14 @@ export function tarifaSucursal(cp, prov, tabla = TARIFAS_SUCURSAL) {
   return null; // sin dato de destino
 }
 
-// ¿Este pedido tuvo envío gratis a sucursal que pagás vos? Si sabemos el método de envío: «sucursal» y gratis.
-// En pedidos viejos sin ese dato: gratis y de 2 o más unidades (los packs con envío gratis a sucursal).
-export function pagasEnvioSucursal(o, prods) {
-  if (n(o.ship) > 0) return false;
-  if (o.sl) return /sucursal/i.test(o.sl);
-  return unidadesPrincipales(o, prods) >= 2;
-}
+// ¿Este pedido tuvo envío gratis (que pagás vos)?
+export function pagasEnvioSucursal(o) { return !(n(o.ship) > 0); }
 // Lo que pagás vos de envío en un pedido con envío gratis para el cliente.
+// Regla del negocio: el envío a domicilio lo paga siempre el cliente; cuando el envío es gratis, lo pagás vos
+// y sale como envío a sucursal (tarifa de Andreani según el código postal de destino).
 export function envioQuePagas(o, cfg, prods) {
   if (n(o.ship) > 0) return 0; // lo pagó el cliente
-  if (pagasEnvioSucursal(o, prods)) return tarifaSucursal(o.cp, o.prov) ?? n(cfg.envioSucursal);
-  if (o.sl && /domicilio/i.test(o.sl) && unidadesPrincipales(o, prods) >= 2) return n(cfg.envioDomicilio);
-  return 0;
+  return tarifaSucursal(o.cp, o.prov) ?? n(cfg.envioSucursal);
 }
 export function costoPedido(o, cfgIn, prods) {
   const cfg = costosCfg(cfgIn);
