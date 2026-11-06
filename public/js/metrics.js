@@ -689,7 +689,7 @@ export function caja(ctx, hoy, semanas = 8, CAJA = "Caja Impoluto") {
 // Conciliación desde la primera venta hasta una fecha: lo que entró según Shopify contra lo que entró de verdad
 // en Mercado Pago por cada venta de Impoluto (solo los cobros vinculados a pedidos: las ventas de Mercado Libre
 // que entran a la misma cuenta quedan afuera), y la caja que debería haber.
-export function conciliacion(ctx, hasta, saldoInicial = 0, CAJA = "Caja Impoluto", ahoraISO = new Date().toISOString()) {
+function conciliacionHasta(ctx, hasta, saldoInicial = 0, CAJA = "Caja Impoluto", ahoraISO = new Date().toISOString()) {
   const cfg = costosCfg(ctx.costos);
   const finDia = Date.parse(hasta + "T23:59:59-03:00");
   const corte = Math.min(finDia, Date.parse(ahoraISO));
@@ -736,6 +736,27 @@ export function conciliacion(ctx, hasta, saldoInicial = 0, CAJA = "Caja Impoluto
     mp: { n: conMp.length, cobrado: T(conMp, "cobrado"), comisiones: T(conMp, "com"), retenciones: T(conMp, "ret"), devoluciones: T(conMp, "dev"), neto: T(conMp, "neto"), liberado, pendiente: T(conMp, "neto") - liberado },
     sinMp: { n: sinMp.length, total: T(sinMp, "shop") }, transferencias: { n: tr.length, total: transferencias },
     caja: { total: caja, saldoInicial: n(saldoInicial), liberado, transferencias, aportes, gastos, retiros, anuncios, shopify: shopifyFee },
+  };
+}
+
+// Conciliación de un período (desde–hasta): las ventas del período y la caja que debería haber al empezar y al terminar.
+// Sin "desde": desde la primera venta.
+export function conciliacion(ctx, hasta, saldoInicial = 0, CAJA = "Caja Impoluto", ahoraISO = new Date().toISOString(), desde = null) {
+  const fin = conciliacionHasta(ctx, hasta, saldoInicial, CAJA, ahoraISO);
+  const primera = fin.desde;
+  const d0 = desde && primera && desde > primera ? desde : primera;
+  const ini = d0 && d0 !== primera ? conciliacionHasta(ctx, addDays(d0, -1), saldoInicial, CAJA, ahoraISO).caja : { total: n(saldoInicial), liberado: 0, transferencias: 0, aportes: 0, gastos: 0, retiros: 0, anuncios: 0, shopify: 0 };
+  const filas = fin.filas.filter((f) => !d0 || f.fecha >= d0);
+  const T = (f, k) => sum(f, (x) => n(x[k]));
+  const conMp = filas.filter((f) => f.mp), sinMp = filas.filter((f) => !f.mp && !f.transfer && f.shop > 0), tr = filas.filter((f) => f.transfer);
+  const lib = sum(conMp.filter((f) => f.liberado), (f) => f.neto);
+  const mov = (k) => n(fin.caja[k]) - n(ini[k]);
+  return {
+    primera, desde: d0, hasta, filas,
+    shopify: { n: filas.length, vendido: T(filas, "vendido"), devoluciones: T(filas, "devShop"), nDev: filas.filter((f) => f.devShop > 0).length, total: T(filas, "shop") },
+    mp: { n: conMp.length, cobrado: T(conMp, "cobrado"), comisiones: T(conMp, "com"), retenciones: T(conMp, "ret"), devoluciones: T(conMp, "dev"), neto: T(conMp, "neto"), liberado: lib, pendiente: T(conMp, "neto") - lib },
+    sinMp: { n: sinMp.length, total: T(sinMp, "shop") }, transferencias: { n: tr.length, total: T(tr, "shop") },
+    caja: { inicio: ini.total, total: fin.caja.total, saldoInicial: n(saldoInicial), liberado: mov("liberado"), transferencias: mov("transferencias"), aportes: mov("aportes"), gastos: mov("gastos"), retiros: mov("retiros"), anuncios: mov("anuncios"), shopify: mov("shopify") },
   };
 }
 
