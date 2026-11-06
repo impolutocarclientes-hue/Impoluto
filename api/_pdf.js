@@ -68,11 +68,13 @@ export async function facturaPdf(cfg, emisorIn, f) {
   txt("Producto", M, y, { bold: true }); right("Cant.", 380, y, { bold: true }); right("Precio unit.", 470, y, { bold: true }); right("Subtotal", W - M, y, { bold: true });
   y -= 6; hr(y);
   const k = esA ? 1 + Number(f.alicuota || 21) / 100 : 1; // en la A los precios van sin IVA
-  const filas = [...(f.items || [])].map((it) => ({ ...it, tot: Math.round((Number(it.tot) / k) * 100) / 100 }));
+  // Cada producto a precio de lista (como Shopify) y después la línea de descuentos.
+  const valorLinea = (it) => Math.max(Number(it.tot) || 0, Number(it.orig) || 0);
+  const filas = [...(f.items || [])].map((it) => ({ ...it, tot: Math.round((valorLinea(it) / k) * 100) / 100 }));
   if (Number(f.envio) > 0) filas.push({ ti: "Envío", q: 1, tot: Math.round((Number(f.envio) / k) * 100) / 100 });
   if (esA) {
     // Los centavos de redondeo van a la línea más grande, así las líneas suman exacto el neto.
-    const origBruto = [...(f.items || []).map((it) => Number(it.tot) || 0), Number(f.envio) > 0 ? Number(f.envio) : 0].reduce((a, v) => a + v, 0);
+    const origBruto = [...(f.items || []).map(valorLinea), Number(f.envio) > 0 ? Number(f.envio) : 0].reduce((a, v) => a + v, 0);
     if (Math.abs(origBruto - f.total) < 0.01 && filas.length) {
       const dif = Math.round((f.neto - filas.reduce((a, it) => a + it.tot, 0)) * 100) / 100;
       const big = filas.reduce((m, it, i) => (it.tot > filas[m].tot ? i : m), 0);

@@ -63,7 +63,9 @@ function itemsDe(o) {
     l = { ...l, ti: (l.pid && TITULOS[l.pid]) || l.ti };
     const q = Number(l.q) || 0, cq = Number(l.cq);
     const tot = Number(l.tot) || 0;
-    return { ti: l.ti + (l.vt && l.vt !== "Default Title" ? " - " + l.vt : ""), q: cq, tot: q > 0 && cq < q ? Math.round((tot * cq / q) * 100) / 100 : tot };
+    const parte = (v) => (q > 0 && cq < q ? Math.round((v * cq / q) * 100) / 100 : v);
+    // orig: precio de lista (antes de descuentos), para que la factura muestre cada producto con su precio y después el descuento, como Shopify.
+    return { ti: l.ti + (l.vt && l.vt !== "Default Title" ? " - " + l.vt : ""), q: cq, tot: parte(tot), orig: parte(Number(l.orig) || tot) };
   });
 }
 
@@ -179,6 +181,18 @@ async function emitirNC(arca, facturas, orderId) {
   return nc;
 }
 
+// Facturas emitidas antes de guardar el precio de lista: lo completamos desde Shopify solo para el PDF
+// (los importes fiscales —total, neto, IVA, CAE— no cambian).
+async function conPreciosDeLista(sec, f) {
+  if (!f || !f.items || f.items.every((it) => it.orig != null) || !sec.shopify || !f.orderId) return f;
+  try {
+    const o = await fetchOrder(sec.shopify, f.orderId);
+    const lista = o ? itemsDe(o) : [];
+    if (lista.length !== f.items.length) return f;
+    return { ...f, items: f.items.map((it, i) => ({ ...it, orig: lista[i].ti === it.ti || lista[i].q === it.q ? lista[i].orig : it.tot })) };
+  } catch { return f; }
+}
+
 async function enviarEmail(sec, arca, f) {
   if (!esFactura(f.tipo) || f.estado !== "emitida") throw new Error("Solo se manda por email una factura vigente.");
   const mail = sec.mail;
@@ -186,7 +200,7 @@ async function enviarEmail(sec, arca, f) {
   const sh = sec.shopify;
   const c = sh ? await contactoPedido(sh, f.orderId) : null;
   if (!c || !c.email) throw new Error("Shopify no nos pasa el email de este cliente: descargá la factura y mandala a mano.");
-  const pdf = await facturaPdf(arca, arca.emisor || {}, { ...f, cliente: c.nombre });
+  const pdf = await facturaPdf(arca, arca.emisor || {}, { ...(await conPreciosDeLista(sec, f)), cliente: c.nombre });
   const nombre = (c.nombre || "").split(" ")[0];
   const html = `<p>Hola${nombre ? " " + nombre.replace(/[<>&]/g, "") : ""}!</p><p>Muchas gracias por tu compra en Impoluto. Te dejamos adjunta la factura de tu pedido ${f.pedido}.</p><p>Cualquier cosa que necesites, respondé este mail.</p><p>¡Que lo disfrutes!<br>Equipo Impoluto</p>`;
   const r = await fetch("https://api.resend.com/emails", {
@@ -218,7 +232,7 @@ export default async function handler(req, res) {
       if (!arca) return deny(res, 404, "Esa factura no existe.");
       const f = (await leerFacturas(arca))[q.pdf];
       if (!f || (f.estado !== "emitida" && f.estado !== "anulada")) return deny(res, 404, "Ese comprobante no existe.");
-      const pdf = await facturaPdf(arca, arca.emisor || {}, f);
+      const pdf = await facturaPdf(arca, arca.emisor || {}, await conPreciosDeLista(sec, f));
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${esNC(f.tipo) ? "Nota-de-Credito" : "Factura"}-${letra(f.tipo)}-${numeroFactura(f)}.pdf"`);
       return res.status(200).send(pdf);
