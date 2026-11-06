@@ -78,7 +78,17 @@ const catOf = (g) => cats().find((c) => c.id === g.catId) || cats().find((c) => 
 // Costos de la configuración + el % real promedio de Mercado Pago (para pedidos que no se pudieron vincular a su cobro).
 const costosVivos = () => ({ ...S.costos, _mpProm: S.mpPcts && S.mpPcts.todos && S.mpPcts.todos.n >= 10 ? S.mpPcts.todos.pct : null });
 const cfg = () => M.costosCfg(costosVivos());
-const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: costosVivos(), prods: S.prods, gastos: S.gastos, movs: S.movs, stockMovs: S.stockMovs || [], fifo: S.fifo });
+// Gasto diario de Meta (solo campañas de Impoluto), pasado a pesos con el dólar ARQ de cada día. Se arma solo
+// desde la conexión con Meta: no se guarda, así nunca se duplica. Lo paga quien diga «La tarjeta de Meta la paga».
+function gastosMetaAuto() {
+  const ads = (S.data && S.data.ads) || [];
+  if (!ads.length) return [];
+  const conf = costosVivos(), conv = M.adsArs(ads, S.data.meta, conf), porDia = {};
+  ads.forEach((a) => { const d = a.d; if (!d || !(nn(a.sp) > 0)) return; const x = (porDia[d] = porDia[d] || { usd: 0, ars: 0 }); x.usd += nn(a.sp); x.ars += nn(a.sp) * M.kDe(a, conv) * conv.recargo; });
+  return Object.entries(porDia).map(([d, x]) => ({ id: "meta-auto-" + d, auto: true, fecha: d, concepto: "Meta Ads · campañas de Impoluto", catId: "meta", monto: x.ars, moneda: conv.usd ? "USD" : "ARS", montoOrig: conv.usd ? x.usd : x.ars, tc: conv.usd && x.usd ? x.ars / x.usd : null, quien: conf.metaPaga || "Caja", pago: "Tarjeta" }));
+}
+const gastosTodos = () => [...S.gastos.filter((g) => g.catId !== "meta" || !(S.data && S.data.ads && S.data.ads.length)), ...gastosMetaAuto()];
+const ctx = () => ({ orders: S.data.orders, ads: S.data.ads, meta: S.data.meta, pays: S.data.pays || [], costos: costosVivos(), prods: S.prods, gastos: gastosTodos(), movs: S.movs, stockMovs: S.stockMovs || [], fifo: S.fifo });
 const money = (v) => (S.cur === "USD" ? usd(nn(v) / nn(cfg().dolar || 1)) : ars(v));
 
 function rangeOf(p) {
@@ -541,7 +551,7 @@ function viewSocios() {
 
 // ---------- Gastos ----------
 function viewGastos() {
-  const list = S.gastos.filter((g) => g.fecha.startsWith(S.gastosMes) && (!S.gastosCat || catOf(g).id === S.gastosCat)).sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const list = gastosTodos().filter((g) => g.fecha.startsWith(S.gastosMes) && (!S.gastosCat || catOf(g).id === S.gastosCat)).sort((a, b) => b.fecha.localeCompare(a.fecha));
   const tot = list.reduce((a, g) => a + nn(g.monto), 0);
   const ivaC = list.reduce((a, g) => a + (g.facturaA ? nn(g.monto) - nn(g.monto) / 1.21 : 0), 0);
   const prev = M.addDays(S.gastosMes + "-01", -1).slice(0, 7), next = M.addDays(S.gastosMes + "-28", 7).slice(0, 7);
@@ -554,7 +564,7 @@ function viewGastos() {
   const cs = Object.values(byCat).sort((a, b) => b.v - a.v);
   if (cs.length) h += `<div class="card"><div class="flow">${cs.map(({ c, v }) => `<div class="row"><span>${esc(c.name)}</span><div class="track"><div class="fill" style="width:${(v / (cs[0].v || 1)) * 100}%;background:${esc(c.color)}"></div></div><b>${money(v)}</b></div>`).join("")}</div></div>`;
   h += list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Categoría</th><th>Pagó</th><th>Medio</th><th class="r">Monto</th></tr></thead><tbody>
-    ${list.map((g) => `<tr class="click" data-open="gasto" data-id="${esc(g.id)}"><td>${esc(g.fecha.slice(8))}/${esc(g.fecha.slice(5, 7))}</td><td>${esc(g.concepto || catOf(g).name)} ${g.cuota ? `<span class="tag warn">Cuota ${g.cuota.i}/${g.cuota.n}</span>` : ""}${g.facturaA ? '<span class="tag">Fact. A</span>' : ""}${g.recurrente ? '<span class="tag">Mensual</span>' : ""}</td><td><span class="dot" style="background:${esc(catOf(g).color)}"></span>${esc(catOf(g).name)}</td><td>${esc(g.quien || "")}</td><td class="muted">${esc(g.pago || "")}</td><td class="r">${money(g.monto)}${g.moneda === "USD" ? `<div class="muted small">${usd(g.montoOrig)} · TC ${int(g.tc)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div>` : `<div class="card empty">Sin gastos en ${esc(monthName(S.gastosMes).toLowerCase())}.</div>`;
+    ${list.map((g) => `<tr ${g.auto ? 'title="Se carga solo desde Meta"' : `class="click" data-open="gasto" data-id="${esc(g.id)}"`}><td>${esc(g.fecha.slice(8))}/${esc(g.fecha.slice(5, 7))}</td><td>${esc(g.concepto || catOf(g).name)} ${g.cuota ? `<span class="tag warn">Cuota ${g.cuota.i}/${g.cuota.n}</span>` : ""}${g.auto ? '<span class="tag">Automático</span>' : ""}${g.facturaA ? '<span class="tag">Fact. A</span>' : ""}${g.recurrente ? '<span class="tag">Mensual</span>' : ""}</td><td><span class="dot" style="background:${esc(catOf(g).color)}"></span>${esc(catOf(g).name)}</td><td>${esc(g.quien || "")}</td><td class="muted">${esc(g.pago || "")}</td><td class="r">${money(g.monto)}${g.moneda === "USD" ? `<div class="muted small">${usd(g.montoOrig)} · TC ${int(g.tc)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div>` : `<div class="card empty">Sin gastos en ${esc(monthName(S.gastosMes).toLowerCase())}.</div>`;
   h += `<p class="note">Acá van los pagos reales (mercadería, envíos, apps, el contador…). Sirven para la caja, el IVA con Factura A y lo que pone cada socio. El costo del producto y los anuncios del dashboard salen solos de Shopify y Meta.</p>`;
   return h + "</div>";
 }
@@ -838,7 +848,7 @@ function csvImp() {
 }
 function csvGastos() {
   const rows = [["Fecha", "Concepto", "Categoría", "Monto ARS", "Moneda", "Monto original", "Dólar", "Pagó", "Medio", "Proveedor", "Factura A", "Mensual", "Notas"]];
-  S.gastos.filter((g) => g.fecha.startsWith(S.gastosMes)).sort((a, b) => a.fecha.localeCompare(b.fecha)).forEach((g) => rows.push([g.fecha, g.concepto || "", catOf(g).name, Math.round(g.monto), g.moneda || "ARS", g.montoOrig ?? g.monto, g.tc || "", g.quien || "", g.pago || "", g.proveedor || "", g.facturaA ? "Sí" : "", g.recurrente ? "Sí" : "", g.notas || ""]));
+  gastosTodos().filter((g) => g.fecha.startsWith(S.gastosMes)).sort((a, b) => a.fecha.localeCompare(b.fecha)).forEach((g) => rows.push([g.fecha, g.concepto || "", catOf(g).name, Math.round(g.monto), g.moneda || "ARS", g.montoOrig ?? g.monto, g.tc || "", g.quien || "", g.pago || "", g.proveedor || "", g.facturaA ? "Sí" : "", g.recurrente ? "Sí" : "", g.notas || ""]));
   download(`gastos_${S.gastosMes}.csv`, rows);
 }
 
