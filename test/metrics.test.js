@@ -286,3 +286,20 @@ test("Ingresos brutos también sobre el envío que pagó el cliente", () => {
   const c = M.costoPedido(order(7, "2026-10-10", 1, 42990 + 10000, { ship: 10000 }), costos, prods);
   assert.ok(Math.abs(c.iibb - ((42990 + 10000) / 1.21) * (costos.iibbPct / 100)) < 1e-6);
 });
+
+test("conciliación: Shopify contra lo que entró en Mercado Pago y caja a una fecha", () => {
+  const o1 = order(21, "2026-10-10", 1, 42990); const o2 = order(22, "2026-10-11", 1, 56990); const o3 = order(23, "2026-10-12", 1, 10000, { g: "Transferencia bancaria" });
+  const pays = [
+    { id: 1, st: "approved", op: "regular_payment", a: o1.c, c: o1.c, monto: 42990, neto: 40000, comision: 2990, retenciones: 0, devuelto: 0, rel: "2026-10-20T10:00:00Z", rs: "released" },
+    { id: 2, st: "approved", op: "regular_payment", a: o2.c, c: o2.c, monto: 56990, neto: 50000, comision: 5000, retenciones: 1990, devuelto: 0, rel: "2026-11-30T10:00:00Z", rs: "pending" },
+  ];
+  pays.forEach((p) => { p.pt = "credit_card"; p.desc = "Impoluto"; });
+  const orders = M.vincularPagos([o1, o2, o3], pays);
+  const cc = M.conciliacion({ orders, pays, costos: { ...costos, shopifyPct: 0 }, prods, gastos: [{ fecha: "2026-10-15", quien: "Caja Impoluto", monto: 5000 }], movs: [] }, "2026-11-05", 1000, "Caja Impoluto", "2026-11-05T12:00:00Z");
+  assert.equal(cc.shopify.total, 42990 + 56990 + 10000);
+  assert.equal(cc.mp.n, 2); {
+    assert.equal(cc.mp.neto, 90000); assert.equal(cc.mp.liberado, 40000); assert.equal(cc.mp.pendiente, 50000);
+    assert.equal(cc.caja.total, 1000 + 40000 + 10000 - 5000);
+  }
+  assert.equal(cc.transferencias.total, 10000);
+});

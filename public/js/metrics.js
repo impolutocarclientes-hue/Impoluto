@@ -191,7 +191,7 @@ export function vincularPagos(orders, pays) {
     }
     if (!mejor) return o;
     mejor.usado = true;
-    return { ...o, _mp: { id: mejor.p.id, com: n(mejor.p.comision), ret: n(mejor.p.retenciones), neto: n(mejor.p.neto), cu: n(mejor.p.cu), rel: mejor.p.rel } };
+    return { ...o, _mp: { id: mejor.p.id, monto: n(mejor.p.monto), dev: n(mejor.p.devuelto), com: n(mejor.p.comision), ret: n(mejor.p.retenciones), neto: n(mejor.p.neto), cu: n(mejor.p.cu), rel: mejor.p.rel, rs: mejor.p.rs } };
   });
 }
 
@@ -684,6 +684,45 @@ export function caja(ctx, hoy, semanas = 8, CAJA = "Caja Impoluto") {
   const entra30 = ((r14.ventas - r14.mp - r14.shopify) / 14) * 30;
   const sale30 = (((pagaCaja ? r14.anuncios : 0) + g14) / 14) * 30;
   return { semanas: lista, proy: { entra: entra30, sale: sale30, neto: entra30 - sale30 } };
+}
+
+// Conciliación desde la primera venta hasta una fecha: lo que entró según Shopify contra lo que entró de verdad
+// en Mercado Pago por cada venta de Impoluto (solo los cobros vinculados a pedidos: las ventas de Mercado Libre
+// que entran a la misma cuenta quedan afuera), y la caja que debería haber.
+export function conciliacion(ctx, hasta, saldoInicial = 0, CAJA = "Caja Impoluto", ahoraISO = new Date().toISOString()) {
+  const cfg = costosCfg(ctx.costos);
+  const finDia = Date.parse(hasta + "T23:59:59-03:00");
+  const corte = Math.min(finDia, Date.parse(ahoraISO));
+  const ords = ctx.orders.filter((o) => estado(o) === "pagado" && dayOf(o.p || o.c) <= hasta).sort((a, b) => (a.p || a.c).localeCompare(b.p || b.c));
+  const filas = ords.map((o) => {
+    const shop = n(o.tot) - n(o.ref);
+    const transfer = esTransferencia(o);
+    const m = o._mp;
+    const liberado = !!(m && m.neto && (m.rs === "released" || (m.rel && Date.parse(m.rel) <= corte)));
+    return { id: o.id, n: o.n, fecha: dayOf(o.p || o.c), shop, transfer, mp: !!m, cobrado: m ? m.monto : 0, com: m ? m.com : 0, ret: m ? m.ret : 0, dev: m ? m.dev : 0, neto: m ? m.neto : 0, rel: m ? m.rel : null, liberado };
+  });
+  const T = (f, k) => sum(f, (x) => n(x[k]));
+  const conMp = filas.filter((f) => f.mp), sinMp = filas.filter((f) => !f.mp && !f.transfer), tr = filas.filter((f) => f.transfer);
+  const liberado = sum(conMp.filter((f) => f.liberado), (f) => f.neto);
+  const shopifyFee = sum(ords, (o) => costoPedido(o, cfg, ctx.prods).shopify);
+  // Caja: saldo inicial + lo que Mercado Pago ya liberó de estas ventas + transferencias + aportes − gastos de la caja − retiros
+  // (− Meta solo si lo paga la caja; − la comisión de Shopify, igual que en la caja de arriba).
+  const conv = adsArs(ctx.ads, ctx.meta, cfg);
+  const metaAuto = !!(ctx.ads && ctx.ads.length), pagaCaja = cfg.metaPaga === CAJA || cfg.metaPaga === "Caja";
+  const gastos = sum((ctx.gastos || []).filter((g) => g.fecha <= hasta && g.quien === CAJA && !(metaAuto && pagaCaja && g.catId === "meta")), (g) => n(g.monto));
+  const anuncios = metaAuto && pagaCaja ? sum(ctx.ads.filter((a) => a.d <= hasta), (a) => n(a.sp) * kDe(a, conv) * conv.recargo) : 0;
+  const movs = ctx.movs || [];
+  const aportes = sum(movs.filter((m) => m.fecha <= hasta && m.tipo !== "retiro"), (m) => n(m.monto));
+  const retiros = sum(movs.filter((m) => m.fecha <= hasta && m.tipo === "retiro"), (m) => n(m.monto));
+  const transferencias = T(tr, "shop");
+  const caja = n(saldoInicial) + liberado + transferencias + aportes - gastos - retiros - anuncios - shopifyFee;
+  return {
+    desde: filas.length ? filas[0].fecha : null, hasta, filas,
+    shopify: { n: filas.length, total: T(filas, "shop") },
+    mp: { n: conMp.length, cobrado: T(conMp, "cobrado"), comisiones: T(conMp, "com"), retenciones: T(conMp, "ret"), devoluciones: T(conMp, "dev"), neto: T(conMp, "neto"), liberado, pendiente: T(conMp, "neto") - liberado },
+    sinMp: { n: sinMp.length, total: T(sinMp, "shop") }, transferencias: { n: tr.length, total: transferencias },
+    caja: { total: caja, saldoInicial: n(saldoInicial), liberado, transferencias, aportes, gastos, retiros, anuncios, shopify: shopifyFee },
+  };
 }
 
 export function saldoCaja(ctx, hoy, saldoInicial = 0, CAJA = "Caja Impoluto") {

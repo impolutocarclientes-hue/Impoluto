@@ -462,6 +462,36 @@ function viewCaja() {
   h += block("semanas", "Semana por semana", `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Semana</th><th class="r">Ventas cobradas</th><th class="r">Comisiones</th><th class="r">Aportes</th><th class="r">Gastos de la caja</th><th class="r">Anuncios</th><th class="r">Retiros</th><th class="r">Neto</th></tr></thead><tbody>
     ${cj.semanas.map((w, i) => `<tr><td>${i === 0 ? "Esta semana" : i === 1 ? "La semana pasada" : shortDate(w.desde) + " al " + shortDate(w.hasta)}</td><td class="r">${money(w.det.ventas)}</td><td class="r">${w.det.comisiones ? "−" + money(w.det.comisiones) : "–"}</td><td class="r">${w.det.aportes ? money(w.det.aportes) : "–"}</td><td class="r">${w.det.gastos ? "−" + money(w.det.gastos) : "–"}</td><td class="r">${w.det.anuncios ? "−" + money(w.det.anuncios) : "–"}</td><td class="r">${w.det.retiros ? "−" + money(w.det.retiros) : "–"}</td><td class="r ${w.neto < 0 ? "down" : "up"}"><b>${money(w.neto)}</b></td></tr>`).join("")}</tbody></table></div>
     <p class="note" style="margin-top:8px">Cómo se arma: entra ${S.data.pays && S.data.pays.length ? "lo que Mercado Pago te libera (neto, el día que se libera) y las ventas por transferencia" : "lo que cobrás en Shopify (suponiendo que Mercado Pago acredita al toque) ya sin comisiones"}, más los aportes. Sale lo que pagó la caja (gastos cargados con "pagó: ${CAJA}"), los anuncios de Meta${cfg().metaPaga === "Caja" ? "" : " (no: los paga " + esc(cfg().metaPaga) + ")"} y los retiros. Los impuestos no salen acá hasta que los cargues como gasto cuando los pagás.</p>`);
+  const hasta = S.cajaHasta || today;
+  const cc = M.conciliacion(c, hasta, nn(S.app.saldoInicial), CAJA);
+  const fila = (l, v, nota, b) => `<tr${b ? ' style="font-weight:600"' : ""}><td>${l}${nota ? ` <span class="muted small">· ${nota}</span>` : ""}</td><td class="r">${money(v)}</td></tr>`;
+  h += block("concilia", "Desde la primera venta" + (cc.desde ? " (" + shortDate(cc.desde) + ")" : ""), `<div class="actions" style="margin-bottom:10px"><span class="muted">Hasta el</span><input class="in" type="date" id="caja-hasta" value="${esc(hasta)}" max="${today}" style="width:160px"><button class="ctl" data-act="caja-hasta">Ver</button><button class="ctl" data-act="csv-concilia">Exportar (CSV)</button></div>
+    <div class="grid">${card({ label: "Caja que debería haber", tip: "Saldo inicial + lo que Mercado Pago ya te liberó de las ventas de Impoluto + transferencias + aportes − gastos que pagó la caja − retiros − comisión de Shopify" + (cfg().metaPaga === "Caja" ? " − Meta" : "") + ".", value: money(cc.caja.total), sub: "al " + shortDate(hasta), tone: cc.caja.total < 0 ? "bad" : "", src: "mix" })}${card({ label: "Te ingresó según Shopify", tip: "Pedidos pagados (total con envío, menos devoluciones parciales).", value: money(cc.shopify.total), sub: cc.shopify.n + " ventas", src: "shopify" })}${card({ label: "Te ingresó de verdad en Mercado Pago", tip: "Lo que te depositó Mercado Pago por cada venta de Impoluto: ya sin comisiones ni retenciones. No incluye las ventas de Mercado Libre.", value: money(cc.mp.neto), sub: `${cc.mp.n} cobros · liberado ${money(cc.mp.liberado)}`, src: "mp" })}</div>
+    <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><tbody>
+      ${fila("Te ingresó según Shopify", cc.shopify.total, cc.shopify.n + " ventas pagadas", true)}
+      ${fila("− Ventas sin cobro de Mercado Pago encontrado", -cc.sinMp.total, cc.sinMp.n ? cc.sinMp.n + " ventas: revisalas abajo" : "ninguna")}
+      ${fila("− Ventas por transferencia (no pasan por Mercado Pago)", -cc.transferencias.total, cc.transferencias.n + " ventas")}
+      ${fila("Cobrado en Mercado Pago", cc.mp.cobrado, cc.mp.n + " cobros", true)}
+      ${fila("− Comisiones de Mercado Pago", -cc.mp.comisiones, "")}
+      ${fila("− Retenciones de impuestos", -cc.mp.retenciones, "son pagos a cuenta: van al contador")}
+      ${fila("− Devoluciones", -cc.mp.devoluciones, "")}
+      ${fila("Te ingresó de verdad en Mercado Pago", cc.mp.neto, "", true)}
+      ${fila("· ya liberado", cc.mp.liberado, "disponible para usar")}
+      ${fila("· por liberar", cc.mp.pendiente, "Mercado Pago lo libera en los próximos días")}
+    </tbody></table></div>
+    <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><tbody>
+      ${fila("Saldo inicial", cc.caja.saldoInicial, "")}
+      ${fila("+ Liberado por Mercado Pago", cc.caja.liberado, "")}
+      ${fila("+ Transferencias", cc.caja.transferencias, "")}
+      ${fila("+ Aportes de socios", cc.caja.aportes, "")}
+      ${fila("− Gastos que pagó la caja", -cc.caja.gastos, "los del Tracker de gastos con «pagó: " + esc(CAJA) + "»")}
+      ${fila("− Retiros", -cc.caja.retiros, "")}
+      ${cc.caja.anuncios ? fila("− Anuncios de Meta", -cc.caja.anuncios, "") : ""}
+      ${fila("− Comisión de Shopify", -cc.caja.shopify, "")}
+      ${fila("Caja que debería haber", cc.caja.total, "", true)}
+    </tbody></table></div>
+    <details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Ver venta por venta (${cc.filas.length})</summary><div class="tbl-wrap" style="margin-top:6px"><table class="tbl"><thead><tr><th>Pedido</th><th>Fecha</th><th class="r">Shopify</th><th class="r">Cobrado MP</th><th class="r">Comisión</th><th class="r">Retenciones</th><th class="r">Te entró</th><th>Liberado</th></tr></thead><tbody>
+    ${cc.filas.slice().reverse().map((f) => `<tr><td>${esc(f.n)}</td><td>${shortDate(f.fecha)}</td><td class="r">${money(f.shop)}</td>${f.mp ? `<td class="r">${money(f.cobrado)}</td><td class="r">${money(f.com)}</td><td class="r">${money(f.ret)}</td><td class="r"><b>${money(f.neto)}</b></td><td>${f.liberado ? "Sí" : f.rel ? "el " + shortDate(f.rel.slice(0, 10)) : "–"}</td>` : `<td colspan="5" class="muted">${f.transfer ? "Transferencia" : "No encontré el cobro en Mercado Pago"}</td>`}</tr>`).join("")}</tbody></table></div></details>`);
   return h + "</div>";
 }
 
@@ -1002,6 +1032,8 @@ document.addEventListener("click", async (e) => {
     else if (act === "csv-orders") csvOrders();
     else if (act === "csv-imp") csvImp();
     else if (act === "csv-g") csvGastos();
+    else if (act === "caja-hasta") { S.cajaHasta = ($("#caja-hasta").value || today).slice(0, 10); render(); }
+    else if (act === "csv-concilia") { const cc = M.conciliacion(ctx(), S.cajaHasta || today, nn(S.app.saldoInicial), CAJA); const rows = [["Pedido", "Fecha", "Shopify", "Cobrado MP", "Comisión MP", "Retenciones", "Devoluciones", "Te entró (neto)", "Se libera", "Liberado", "Nota"]]; cc.filas.forEach((f) => rows.push([f.n, f.fecha, Math.round(f.shop), f.mp ? Math.round(f.cobrado) : "", f.mp ? Math.round(f.com) : "", f.mp ? Math.round(f.ret) : "", f.mp ? Math.round(f.dev) : "", f.mp ? Math.round(f.neto) : "", f.rel ? f.rel.slice(0, 10) : "", f.liberado ? "Sí" : "No", f.mp ? "" : f.transfer ? "Transferencia" : "Sin cobro en MP"])); download(`conciliacion_hasta_${S.cajaHasta || today}.csv`, rows); }
     else if (act === "esc-save") { const nombre = ($("#esc-name").value || "").trim() || "Escenario " + (S.escenarios.length + 1); await db.collection("escenarios").doc().set({ nombre: nombre.slice(0, 80), v: calcState(), createdAt: new Date().toISOString() }); toast("Escenario guardado"); }
     else if (act === "calc-copy") { const v = calcState(), r = calcular(v), R = S.calcReg === "mono" ? r.mono : r.ri; await navigator.clipboard.writeText(`Precio ${ars(v.precio)} · CPA break even ${usd1(R.cpaBreakEvenUsd)} (${ars(R.cpaBreakEvenArs)}) · ROAS break ${x2(R.roasBreak)} · Utilidad ${ars(R.utilidadProm)} (${pct(R.margenProm)})`); toast("Copiado"); }
     else if (act === "dolarhoy" || act === "dolarhoy-cfg") {
