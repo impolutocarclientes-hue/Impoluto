@@ -303,3 +303,11 @@ test("conciliación: Shopify contra lo que entró en Mercado Pago y caja a una f
   }
   assert.equal(cc.transferencias.total, 10000);
 });
+
+test("conciliación: resta las devoluciones (Shopify y Mercado Pago)", () => {
+  const o = { ...order(31, "2026-10-20", 1, 47990), f: "REFUNDED", ref: 47990 };
+  const pays = [{ id: 9, st: "refunded", op: "regular_payment", pt: "credit_card", desc: "Compra en Impoluto", a: o.c, c: o.c, monto: 47990, devuelto: 47990, neto: 46591, comision: 906 }];
+  const cc = M.conciliacion({ orders: [o], pays, costos, prods, gastos: [], movs: [] }, "2026-11-05", 0, "Caja Impoluto", "2026-11-05T12:00:00Z");
+  assert.equal(cc.shopify.vendido, 47990); assert.equal(cc.shopify.devoluciones, 47990); assert.equal(cc.shopify.total, 0);
+  assert.equal(cc.mp.devoluciones, 47990); assert.equal(cc.mp.neto, 0);
+});

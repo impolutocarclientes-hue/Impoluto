@@ -693,13 +693,27 @@ export function conciliacion(ctx, hasta, saldoInicial = 0, CAJA = "Caja Impoluto
   const cfg = costosCfg(ctx.costos);
   const finDia = Date.parse(hasta + "T23:59:59-03:00");
   const corte = Math.min(finDia, Date.parse(ahoraISO));
-  const ords = ctx.orders.filter((o) => estado(o) === "pagado" && dayOf(o.p || o.c) <= hasta).sort((a, b) => (a.p || a.c).localeCompare(b.p || b.c));
+  // Todas las ventas que se cobraron alguna vez: las pagadas y también las que después se devolvieron o cancelaron.
+  const cobradaAlgunaVez = (o) => !o.t && ["PAID", "PARTIALLY_PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(String(o.f || "").toUpperCase());
+  const ords = ctx.orders.filter((o) => cobradaAlgunaVez(o) && dayOf(o.p || o.c) <= hasta).sort((a, b) => (a.p || a.c).localeCompare(b.p || b.c));
+  // Los cobros devueltos no los vincula vincularPagos (solo aprobados): los buscamos acá, mismo monto y pocas horas.
+  const usados = new Set(ords.filter((o) => o._mp).map((o) => String(o._mp.id)));
+  const devueltos = (ctx.pays || []).filter((p) => (p.st === "refunded" || p.st === "charged_back") && esCheckoutOnline(p) && !usados.has(String(p.id)));
+  const buscarDevuelto = (o) => {
+    const t = Date.parse(o.p || o.c); let mejor = null, dist = Infinity;
+    for (const p of devueltos) { if (usados.has(String(p.id)) || Math.abs(n(p.monto) - n(o.tot)) > 1) continue; const d = Math.abs(Date.parse(p.a || p.c) - t); if (d < dist && d < 3 * 3600e3) { mejor = p; dist = d; } }
+    if (!mejor) return null;
+    usados.add(String(mejor.id));
+    // Devolución total: Mercado Pago devuelve la plata y te reintegra la comisión, así que no te queda nada.
+    return { id: mejor.id, monto: n(mejor.monto), dev: n(mejor.devuelto) || n(mejor.monto), com: 0, ret: 0, neto: 0, rel: null, rs: "refunded" };
+  };
   const filas = ords.map((o) => {
-    const shop = n(o.tot) - n(o.ref);
+    const cancelada = !!o.x || estado(o) === "devuelto";
+    const devShop = n(o.ref) || (cancelada ? n(o.tot) : 0);
     const transfer = esTransferencia(o);
-    const m = o._mp;
+    const m = o._mp || (cancelada || n(o.ref) ? buscarDevuelto(o) : null);
     const liberado = !!(m && m.neto && (m.rs === "released" || (m.rel && Date.parse(m.rel) <= corte)));
-    return { id: o.id, n: o.n, fecha: dayOf(o.p || o.c), shop, transfer, mp: !!m, cobrado: m ? m.monto : 0, com: m ? m.com : 0, ret: m ? m.ret : 0, dev: m ? m.dev : 0, neto: m ? m.neto : 0, rel: m ? m.rel : null, liberado };
+    return { id: o.id, n: o.n, fecha: dayOf(o.p || o.c), vendido: n(o.tot), devShop, shop: n(o.tot) - devShop, cancelada, transfer, mp: !!m, cobrado: m ? m.monto : 0, com: m ? m.com : 0, ret: m ? m.ret : 0, dev: m ? m.dev : 0, neto: m ? m.neto : 0, rel: m ? m.rel : null, liberado };
   });
   const T = (f, k) => sum(f, (x) => n(x[k]));
   const conMp = filas.filter((f) => f.mp), sinMp = filas.filter((f) => !f.mp && !f.transfer), tr = filas.filter((f) => f.transfer);
@@ -718,7 +732,7 @@ export function conciliacion(ctx, hasta, saldoInicial = 0, CAJA = "Caja Impoluto
   const caja = n(saldoInicial) + liberado + transferencias + aportes - gastos - retiros - anuncios - shopifyFee;
   return {
     desde: filas.length ? filas[0].fecha : null, hasta, filas,
-    shopify: { n: filas.length, total: T(filas, "shop") },
+    shopify: { n: filas.length, vendido: T(filas, "vendido"), devoluciones: T(filas, "devShop"), nDev: filas.filter((f) => f.devShop > 0).length, total: T(filas, "shop") },
     mp: { n: conMp.length, cobrado: T(conMp, "cobrado"), comisiones: T(conMp, "com"), retenciones: T(conMp, "ret"), devoluciones: T(conMp, "dev"), neto: T(conMp, "neto"), liberado, pendiente: T(conMp, "neto") - liberado },
     sinMp: { n: sinMp.length, total: T(sinMp, "shop") }, transferencias: { n: tr.length, total: transferencias },
     caja: { total: caja, saldoInicial: n(saldoInicial), liberado, transferencias, aportes, gastos, retiros, anuncios, shopify: shopifyFee },
