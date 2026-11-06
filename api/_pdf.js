@@ -59,7 +59,7 @@ export async function facturaPdf(cfg, emisorIn, f) {
     if (f.cliente) txt("Cliente: " + f.cliente, M + 160, y, { size: 9 });
     txt("Pedido: " + (f.pedido || ""), W - M - 110, y, { size: 9 });
   }
-  y -= 14; txt("Condición de venta: Contado / pago electrónico", M, y, { size: 8.5, color: gris });
+  y -= 14; txt("Condición de venta: Pago electrónico", M, y, { size: 8.5, color: gris });
   if (esNC && f.asociado) { y -= 12; txt(`Comprobante asociado: Factura ${f.asociado.tipo === 1 ? "A" : "B"} ${pad(f.asociado.pto, 5)}-${pad(f.asociado.nro, 8)} del ${fechaAR(f.asociado.fecha)}`, M, y, { size: 8.5, bold: true }); }
   y -= 12; hr(y);
 
